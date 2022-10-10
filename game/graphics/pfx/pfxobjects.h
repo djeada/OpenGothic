@@ -1,0 +1,71 @@
+#pragma once
+
+#include <Tempest/Matrix4x4>
+#include <Tempest/UniformBuffer>
+
+#include <memory>
+#include <list>
+#include <random>
+
+#include "world/objects/pfxemitter.h"
+#include "graphics/visualobjects.h"
+#include "resources.h"
+
+class SceneGlobals;
+class ParticleFx;
+class PfxBucket;
+class WorldView;
+
+class PfxObjects final {
+  public:
+    PfxObjects(WorldView& world, const SceneGlobals& scene, VisualObjects& visual);
+    ~PfxObjects();
+
+    static constexpr const float viewRage = 4000.f;
+
+    struct VboContext {
+      Tempest::Vec3 left = {};
+      Tempest::Vec3 top  = {};
+      Tempest::Vec3 z    = {};
+
+      Tempest::Vec3 leftA = {};
+      Tempest::Vec3 topA  = {0,1,0};
+
+      Tempest::Matrix4x4 vp;
+      };
+
+    void       setViewerPos(const Tempest::Vec3& pos);
+
+    void       resetTicks();
+    void       tick(uint64_t ticks);
+    bool       isInPfxRange(const Tempest::Vec3& pos) const;
+
+    void       preFrameUpdate(uint8_t fId);
+
+  private:
+    struct SpriteEmitter {
+      uint8_t                     visualCamAlign = 0;
+      int32_t                     zBias          = 0;
+      ZMath::float2               decalDim = {};
+      std::unique_ptr<ParticleFx> pfx;
+      };
+
+    PfxBucket&                    getBucket(const ParticleFx& decl);
+    PfxBucket&                    getBucket(const Material& mat, const ZenLoad::zCVobData& vob);
+
+    WorldView&                    world;
+    const SceneGlobals&           scene;
+    VisualObjects&                visual;
+    std::recursive_mutex          sync;
+
+    std::list<PfxBucket>          bucket;
+    std::vector<SpriteEmitter>    spriteEmit;
+
+    Tempest::Vec3                 viewerPos={};
+    uint64_t                      lastUpdate=0;
+
+    TrlObjects                    trails;
+
+  friend class PfxEmitter;
+  friend class TrlObjects;
+  };

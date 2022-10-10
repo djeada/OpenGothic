@@ -1,7 +1,7 @@
-cmake_minimum_required(VERSION 3.12)
+cmake_minimum_required(VERSION 3.16)
 
 project(Gothic2Notr LANGUAGES C CXX)
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(BUILD_SHARED_LIBS OFF)
 
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/opengothic)
@@ -10,6 +10,8 @@ set(CMAKE_DEBUG_POSTFIX "")
 set(CMAKE_RELWITHDEBINFO_POSTFIX "")
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_SKIP_RPATH ON)
+
+add_executable(${PROJECT_NAME})
 
 if(MSVC)
   add_definitions(-D_USE_MATH_DEFINES)
@@ -20,7 +22,76 @@ if(MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4800")
 endif()
 
+if(NOT MSVC)
+  target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wconversion -Wno-strict-aliasing -Werror)
+
+  if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "7.1" AND NOT APPLE AND NOT ${CMAKE_CXX_COMPILER_ID} MATCHES "Clang")
+    target_compile_options(${PROJECT_NAME} PRIVATE -Wno-format-truncation)
+  endif()
+  if(UNIX)
+    # -rdynamic is needed to allow obtaining meaningful backtraces
+    target_link_options(${PROJECT_NAME} PRIVATE -rdynamic)
+  endif()
+endif()
+
+if(WIN32)
+  if(MSVC)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup" )
+  else()
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -mwindows")
+  endif()
+endif()
+
+## OpenGothic
+
+# sources
+file(GLOB_RECURSE OPENGOTHIC_SOURCES
+    "game/*.h"
+    "game/*.cpp")
+
+target_sources(${PROJECT_NAME} PRIVATE ${OPENGOTHIC_SOURCES} icon.rc)
+
+# shaders
+add_subdirectory(shader)
+target_link_libraries(${PROJECT_NAME} GothicShaders)
+
+include_directories("game")
+
 ## submodule dependencies
+
+# edd-dbg
+add_subdirectory(lib/edd-dbg)
+include_directories(lib/edd-dbg/include)
+if(WIN32)
+  target_link_libraries(${PROJECT_NAME} edd_dbg)
+endif()
+
+if(WIN32)
+  target_link_libraries(${PROJECT_NAME} shlwapi DbgHelp)
+elseif(UNIX)
+  target_link_libraries(${PROJECT_NAME} -lpthread -ldl)
+endif()
+
+# ZenLib
+set(BUILD_SQUISH_WITH_SSE2 OFF CACHE INTERNAL "")
+add_subdirectory(lib/ZenLib)
+include_directories(lib/ZenLib)
+target_link_libraries(${PROJECT_NAME} zenload daedalus)
+
+# TinySoundFont
+add_definitions(-DTSF_NO_STDIO)
+include_directories(lib/TinySoundFont)
+
+# Tempest
+set(TEMPEST_BUILD_SHARED ON  CACHE INTERNAL "")
+add_subdirectory(lib/Tempest/Engine)
+include_directories(lib/Tempest/Engine/include)
+target_link_libraries(${PROJECT_NAME} Tempest)
+
+# zip
+include_directories(lib/miniz)
+add_library(miniz STATIC "lib/miniz/miniz.h" "lib/miniz/miniz.c")
+target_link_libraries(${PROJECT_NAME} miniz)
 
 # bullet physics
 set(BULLET2_MULTITHREADING       ON  CACHE INTERNAL "")
@@ -36,74 +107,16 @@ set(GLFW_BUILD_TESTS             OFF CACHE INTERNAL "")
 set(GLFW_BUILD_DOCS              OFF CACHE INTERNAL "")
 set(BUILD_BULLET3                OFF CACHE INTERNAL "") # Can use bullet2, bullet3 wants to build examples...
 add_subdirectory(lib/bullet3)
-
-# edd-dbg
-add_subdirectory(lib/edd-dbg)
-
-# ZenLib
-add_subdirectory(lib/ZenLib)
-
-# MoltenTempest
-set(TEMPEST_BUILD_SHARED ON  CACHE INTERNAL "")
-add_subdirectory(lib/MoltenTempest/Engine)
-
-## OpenGothic
-
-# sources
-file(GLOB OPENGOTHIC_SOURCES
-    "Game/*.h"
-    "Game/*.cpp"
-    "Game/**/*.h"
-    "Game/**/*.cpp"
-    "Game/**/**/*.h"
-    "Game/**/**/*.cpp"
-    "Game/**/**/**/*.h"
-    "Game/**/**/**/*.cpp")
-
-# shaders
-add_subdirectory(shader)
-
-# executable
-add_executable(${PROJECT_NAME}
-    ${OPENGOTHIC_SOURCES}
-    icon.rc)
-
-include_directories("Game")
-
-# edd-dbg
-include_directories(lib/edd-dbg/include)
-if(WIN32)
-  target_link_libraries(${PROJECT_NAME} edd_dbg)
+if(NOT MSVC)
+  target_compile_options(BulletDynamics         PRIVATE -Wno-argument-outside-range)
+  target_compile_options(BulletInverseDynamics  PRIVATE -Wno-argument-outside-range)
+  target_compile_options(BulletSoftBody         PRIVATE -Wno-argument-outside-range)
+  target_compile_options(Bullet3Common          PRIVATE -Wno-argument-outside-range)
+  target_compile_options(BulletCollision        PRIVATE -Wno-argument-outside-range)
+  target_compile_options(LinearMath             PRIVATE -Wno-argument-outside-range)
 endif()
-
-if(WIN32)
-  target_link_libraries(${PROJECT_NAME} shlwapi DbgHelp)
-elseif(UNIX)
-  target_link_libraries(${PROJECT_NAME} -lpthread)
-endif()
-
-# ZenLib
-include_directories(lib/ZenLib)
-target_link_libraries(${PROJECT_NAME} zenload daedalus)
-
-# TinySoundFont
-add_definitions(-DTSF_NO_STDIO)
-include_directories(lib/TinySoundFont)
-
-# bullet physics
 include_directories(lib/bullet3/src)
 target_link_libraries(${PROJECT_NAME} BulletDynamics BulletCollision LinearMath)
-
-# MoltenTempest
-include_directories(lib/MoltenTempest/Engine/include)
-target_link_libraries(${PROJECT_NAME} MoltenTempest)
-
-# shaders
-target_link_libraries(${PROJECT_NAME} GothicShaders)
-
-if(NOT MSVC)
-  target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wconversion -Wno-strict-aliasing -Werror)
-endif()
 
 # script for launching in binary directory
 if(WIN32)
@@ -121,7 +134,4 @@ elseif(UNIX)
 endif()
 
 # installation
-install(
-    TARGETS ${PROJECT_NAME}
-    DESTINATION bin
-    )
+install(TARGETS ${PROJECT_NAME} DESTINATION bin)

@@ -10,6 +10,7 @@
 
 # IDE
 CMakeLists.txt.user*
+.idea
 
 # Build-dir
 build/
@@ -19,6 +20,11 @@ bin/crash.log
 bin/dbg.bin
 bin/*.sav
 bin/Gothic.ini
+out/*
 
 # internal
+.vs/
 internal/
+
+#os
+.DS_Store

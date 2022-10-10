@@ -1,14 +1,16 @@
 ### OpenGothic
 Open source remake of Gothic 2: Night of the raven.
-Motivation: Original Gothic 1 and Gothic 2 is still great games to play, but it not easy to make them work on modern systems.
-The goal of this project is to make feature complete Gothic client-app compatible with game itself and regular mods for it.
+Motivation: The original Gothic 1 and Gothic 2 are still great games, but it not easy to make them work on modern systems.  
+The goal of this project is to make a feature complete Gothic game client compatible with the game and mods.
 
 ----
 [![Latest build](https://img.shields.io/github/release-pre/Try/opengothic?style=for-the-badge)](https://github.com/Try/opengothic/releases/latest)
 ![Screenshoot](scr0.png)
 ##### Work in progress
 [![Build status](https://ci.appveyor.com/api/projects/status/github/Try/opengothic?svg=true)](https://ci.appveyor.com/project/Try/opengothic)  
-Core gameplay is done, you can complete first chapter, as well as all addon content for any guild. 
+
+The base game has been replicated fully: you can complete the main quest and addon. 
+Check out the [bugtracker](https://github.com/Try/OpenGothic/issues) for list of known issues.
 
 ##### Install on Windows
 1. Install original gothic game from CD/Steam/GOG/etc  
@@ -22,73 +24,50 @@ Common Gothic installation paths:
 - "~/PlayOnLinux's virtual drives/Gothic2_gog/drive_c/Gothic II"
 
 ##### Build it for Linux
-1. Install dependencies for Ubuntu 20.04:
-
-`sudo apt install git cmake g++ glslang-tools libvulkan-dev libasound2-dev libx11-dev`
-
-2. Clone this repo, including submodules:
-
-`git clone --recurse-submodules https://github.com/Try/OpenGothic.git`
-
-3. Create build dir and build as usual:
-
-`mkdir OpenGothic/build` --> `cd OpenGothic/build` --> `cmake ..` --> `make`
+```bash
+# 1. Install dependencies
+# 1.1 Latest vulkan SDK
+wget -qO - http://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
+sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-focal.list http://packages.lunarg.com/vulkan/lunarg-vulkan-focal.list
+sudo apt update
+sudo apt install vulkan-sdk
+# 1.2 Ubuntu 20.04:
+sudo apt install git cmake g++ glslang-tools libvulkan-dev libasound2-dev libx11-dev libxcursor-dev
+# 1.3 Arch:
+sudo pacman -S git cmake gcc glslang vulkan-devel alsa-lib libx11 libxcursor vulkan-icd-loader libglvnd
+# 2. Clone this repo, including submodules:
+git clone --recurse-submodules https://github.com/Try/OpenGothic.git
+# 2.1 if you pull a new version:
+git pull --recurse-submodules
+# 3. Create build dir and build as usual:
+cd OpenGothic
+cmake -B build -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE:STRING=RelWithDebInfo
+make -C build -j <number_of_cpucores>
+# 4.
+# locate executables at OpenGothic/build/opengothic
+```
 
 #### Gameplay video
-[![Video](https://img.youtube.com/vi/21OTvuMdwb4/0.jpg)](https://www.youtube.com/watch?v=21OTvuMdwb4) [![Video](https://img.youtube.com/vi/MUVd-ZWliKY/0.jpg)](https://www.youtube.com/watch?v=MUVd-ZWliKY)
-
-##### Features
-* General
-    * Walk - Done
-    * Walk(in water) - Done
-    * Run - Done
-    * Sneak - Done
-    * Jump - Done
-    * Jump(pull-up) - Not Implemented
-    * Swimming - Partial
-    * Physic - mostly Done, with Bullet collision. Need small tweaks/tuning
-* Loot
-    * Pick an object - Partial(no animation)
-    * Chest - Done
-    * Ransack a body - Done
-    * Object ownership/theft reaction - Not Implemented 
-* Dialogs
-    * Dialog script - Done
-    * Trading - Done ( only G2 style, sorry G1 fans )
-* Battle
-    * Hit box - Partial(same bbox for everyone) 
-    * Melee combat - Done
-    * Range - Done
-    * Magic - Partial (only some of spells working)
-* Visual
-    * Body animation - Done
-    * Head/Morph animation - Not Implemented
-    * Shadows - Done
-    * Mob-use animations(seat/cook/sleep) - Partial
-* UI
-    * Inventory - Done
-    * Game menu/menu script - Done, except scrollbars
-    * Character info screen - Done
-    * Quest log - Not Implemented 
-* Sound
-    * animation sfx/gfx - Done
-    * sound blockers - Done(but implementation is very simple)
-    * music - in progress
-
+[![Video](https://img.youtube.com/vi/R9MNhNsBVQ0/0.jpg)](https://www.youtube.com/watch?v=R9MNhNsBVQ0) [![Video](https://img.youtube.com/vi/6BvwNkPMbwM/0.jpg)](https://www.youtube.com/watch?v=6BvwNkPMbwM)
 
 ##### Mods compatibility
-Mods delivered as *.mod files shoud work, since *.mod contains visual content and scripts.  
-Don't expect mods created with AST-SDK to work, since original Gothic and OpenGothic are not binary compatible.  
-Don't expect DirectX11 mod to work, since technicaly it's not a mod. But Project is aiming to have a good graphics with shaders out of box.  
-
+- [x] Content mods (retexture/reworld/animations)
+- [ ] Mods bases on Ikarus/LeGo 
+- [ ] AST sdk
+- [ ] Mods bases on Union (not possible)
+- [ ] DirectX11 - same as Union, but don't worry - OpenGothic has nice graphics out of the box
 
 ##### Command line arguments
 * -g specify gothic game catalog
+* -game:<modfile.init> specify game modification manifest (GothicStarter compatibility)
 * -nomenu - skip main menu
-* -nofrate - Disable FPS display in-game
+* -nofrate - disable FPS display in-game
 * -w <worldname.zen> - startup world; newworld.zen is default
 * -save \<q> - startup with quick save
 * -save \<number> - startup with specified save-game slot
 * -window - window mode
-* -rambo - reduce damage to player to 1hp
 * -v -validation - enable Vulkan validation mode
+* -g1 - assume a Gothic 1 installation
+* -g2 - assume a Gothic 2 installation
+* -rt \<boolean> - explicitly enable or disable ray-query
+* -ms \<boolean> - explicitly enable or disable meshlets
