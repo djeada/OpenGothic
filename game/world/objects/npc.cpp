@@ -1955,7 +1955,7 @@ void Npc::tick(uint64_t dt) {
         t-=v;
         int dmg = t/tickSz - (t-int(dt))/tickSz;
         if(dmg>0)
-          changeAttribute(ATR_HITPOINTS,-100*dmg,false);
+          changeAttribute(ATR_HITPOINTS,-dmg,false);
         }
       }
     }
@@ -2117,8 +2117,6 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
     case AI_StandUpQuick:
       // NOTE: B_ASSESSTALK calls AI_StandUp, to make npc stand, if it's not on a chair or something
       if(interactive()!=nullptr) {
-        // if(interactive()->stateMask()==BS_SIT)
-        //   ;
         if(!setInteraction(nullptr,false)) {
           queue.pushFront(std::move(act));
           }
@@ -2131,6 +2129,7 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
         }
       else if(bodyStateMasked()!=BS_DEAD) {
         visual.stopAnim(*this,"");
+        setStateItem(MeshObjects::Mesh(),"");
         setAnim(Anim::Idle);
         }
       break;
@@ -2291,7 +2290,7 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
       break;
       }
     case AI_ProcessInfo: {
-      const int PERC_DIST_DIALOG = 500;
+      const int PERC_DIST_DIALOG = 2000;
 
       if(act.target==nullptr)
         break;
@@ -3620,6 +3619,7 @@ void Npc::quitIneraction() {
     return;
   if(invTorch)
     processDefInvTorch();
+  implAniWait(visual.pose().animationTotalTime());
   currentInteract=nullptr;
   }
 
@@ -3854,6 +3854,7 @@ bool Npc::isAiBusy() const {
 void Npc::clearAiQueue() {
   aiQueue.clear();
   aiQueueOverlay.clear();
+  aniWaitTime = 0;
   waitTime    = 0;
   faiWaitTime = 0;
   fghAlgo.onClearTarget();

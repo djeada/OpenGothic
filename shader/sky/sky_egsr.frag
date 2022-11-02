@@ -154,14 +154,10 @@ const vec3 debugColors[MAX_DEBUG_COLORS] = {
   vec3(0,0.5,1),
   };
 
-vec4 fog(vec2 uv, vec3 sunDir) {
-  // vec3  pos1     = inverse(vec3(inPos,1));
-  // vec3  posz     = inverse(vec3(inPos,z));
-  // vec3  pos0     = inverse(vec3(inPos,0));
-
+vec4 fog(vec2 uv, float z, vec3 sunDir) {
   float dMin = 0;
   float dMax = 0.9999;
-  float z    = texture(depth,uv).r;
+
   float dZ   = reconstructCSZ(   z, push.clipInfo);
   float d0   = reconstructCSZ(dMin, push.clipInfo);
   float d1   = reconstructCSZ(dMax, push.clipInfo);
@@ -180,10 +176,10 @@ vec4 fog(vec2 uv, vec3 sunDir) {
   return vec4(lum, fogDens);
   }
 #else
-vec4 fog(vec2 uv, vec3 sunDir) {
+vec4 fog(vec2 uv, float z, vec3 sunDir) {
   float dMin = 0.0;
   float dMax = 1.0;
-  float z    = texture(depth,uv).r;
+
   float dZ   = reconstructCSZ(   z, push.clipInfo);
   float d0   = reconstructCSZ(dMin, push.clipInfo);
   float d1   = reconstructCSZ(dMax, push.clipInfo);
@@ -237,7 +233,7 @@ vec3 applyClouds(vec3 skyColor, vec3 sunDir) {
   vec3  view     = normalize(pos1);
 
   float L        = rayIntersect(pos, view, RClouds);
-  // TODO: http://killzone.dl.playstation.net/killzone/horizonzerodawn/presentations/Siggraph15_Schneider_Real-Time_Volumetric_Cloudscapes_of_Horizon_Zero_Dawn.pdf\
+  // TODO: http://killzone.dl.playstation.net/killzone/horizonzerodawn/presentations/Siggraph15_Schneider_Real-Time_Volumetric_Cloudscapes_of_Horizon_Zero_Dawn.pdf
   // fake cloud scattering inspired by Henyey-Greenstein model
   vec3  lum      = vec3(0);
   lum += atmosphere  (vec3( view.x, view.y*0.0, view.z), sunDir);
@@ -259,11 +255,17 @@ void main() {
   vec2 uv     = inPos*vec2(0.5)+vec2(0.5);
   vec3 view   = normalize(inverse(vec3(inPos,1.0)));
   vec3 sunDir = push.sunDir;
+  float z     = textureLod(depth,uv,0).r;
+
+#if defined(FOG)
+  if(z>=1.0)
+    discard;
+#endif
 
   // NOTE: not a physical value, but dunno how to achive nice look without it
   float fogFixup = 20.0;
 
-  vec4  val      = fog(uv,push.sunDir) * fogFixup;
+  vec4  val      = fog(uv,z,push.sunDir) * fogFixup;
   vec3  lum      = val.rgb;
 #if defined(FOG)
   //outColor = fog(uv, sunDir);
