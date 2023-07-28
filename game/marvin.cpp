@@ -1,9 +1,11 @@
 #include "marvin.h"
 
+#include <charconv>
 #include <initializer_list>
 #include <cstdint>
 #include <cctype>
 
+#include "utils/string_frm.h"
 #include "world/objects/npc.h"
 #include "camera.h"
 #include "gothic.h"
@@ -48,17 +50,17 @@ Marvin::Marvin() {
     {"play ani %s",                C_Invalid},
     {"play faceani %s",            C_Invalid},
     {"remove overlaymds %s",       C_Invalid},
-    {"toogle aniinfo",             C_Invalid},
+    {"toggle aniinfo",             C_Invalid},
     {"zoverlaymds apply",          C_Invalid},
     {"zoverlaymds remove",         C_Invalid},
     {"zstartani %s %s",            C_Invalid},
-    {"ztoogle modelskeleton",      C_Invalid},
-    {"ztoogle rootsmoothnode",     C_Invalid},
-    {"ztoogle vobmorph",           C_Invalid},
+    {"ztoggle modelskeleton",      C_Invalid},
+    {"ztoggle rootsmoothnode",     C_Invalid},
+    {"ztoggle vobmorph",           C_Invalid},
 
     // rendering
     {"set clipfactor %d",          C_Invalid},
-    {"toogle frame",               C_ToogleFrame},
+    {"toggle frame",               C_ToggleFrame},
     {"zfogzone",                   C_Invalid},
     {"zhighqualityrender",         C_Invalid},
     {"zmark",                      C_Invalid},
@@ -70,18 +72,18 @@ Marvin::Marvin() {
     {"zset levelclipscaler %f",    C_Invalid},
     {"zset nearclipz %f",          C_Invalid},
     {"zset vobfarclipscaler %f",   C_Invalid},
-    {"ztoogle ambientvobs",        C_Invalid},
-    {"ztoogle flushambientcol",    C_Invalid},
-    {"ztoogle lightstat",          C_Invalid},
-    {"ztoogle markpmeshmaterials", C_Invalid},
-    {"ztoogle matmorph",           C_Invalid},
-    {"ztoogle renderorder",        C_Invalid},
-    {"ztoogle renderportals",      C_Invalid},
-    {"ztoogle rendervob",          C_Invalid},
-    {"ztoogle showportals",        C_Invalid},
-    {"ztoogle showtraceray",       C_Invalid},
-    {"ztoogle tnl",                C_Invalid},
-    {"ztoogle vobbox",             C_Invalid},
+    {"ztoggle ambientvobs",        C_Invalid},
+    {"ztoggle flushambientcol",    C_Invalid},
+    {"ztoggle lightstat",          C_Invalid},
+    {"ztoggle markpmeshmaterials", C_Invalid},
+    {"ztoggle matmorph",           C_Invalid},
+    {"ztoggle renderorder",        C_Invalid},
+    {"ztoggle renderportals",      C_Invalid},
+    {"ztoggle rendervob",          C_Invalid},
+    {"ztoggle showportals",        C_Invalid},
+    {"ztoggle showtraceray",       C_Invalid},
+    {"ztoggle tnl",                C_Invalid},
+    {"ztoggle vobbox",             C_Invalid},
     {"zvideores %d %d %d",         C_Invalid},
 
     // game
@@ -90,33 +92,40 @@ Marvin::Marvin() {
     {"load game",                  C_Invalid},
     {"save game",                  C_Invalid},
     {"save zen",                   C_Invalid},
-    {"set time %d %d",             C_Invalid},
+    {"set time %d %d",             C_SetTime},
     {"spawnmass %d",               C_Invalid},
     {"spawnmass giga %d",          C_Invalid},
-    {"toogle descktop",            C_Invalid},
-    {"toogle freepoints",          C_Invalid},
-    {"toogle screen",              C_Invalid},
-    {"toogle time",                C_Invalid},
-    {"toogle wayboxes",            C_Invalid},
-    {"toogle waynet",              C_Invalid},
+    {"toggle desktop",             C_ToggleDesktop},
+    {"toggle freepoints",          C_Invalid},
+    {"toggle screen",              C_Invalid},
+    {"toggle time",                C_ToggleTime},
+    {"toggle wayboxes",            C_Invalid},
+    {"toggle waynet",              C_Invalid},
     {"version",                    C_Invalid},
     {"zstartrain",                 C_Invalid},
     {"zstartsnow",                 C_Invalid},
     {"ztimer multiplyer",          C_Invalid},
     {"ztimer realtime",            C_Invalid},
-    {"ztoogle helpervisuals",      C_Invalid},
-    {"ztoogle showzones",          C_Invalid},
+    {"ztoggle helpervisuals",      C_Invalid},
+    {"ztoggle showzones",          C_Invalid},
     {"ztrigger %s",                C_Invalid},
     {"zuntrigger %s",              C_Invalid},
 
-    {"cheat full",        C_CheatFull},
+    {"cheat full",                 C_CheatFull},
+    {"cheat god",                  C_CheatGod},
+    {"kill",                       C_Kill},
+
+    {"aigoto %s",                  C_AiGoTo},
+    {"goto waypoint %s",           C_GoToWayPoint},
+    {"goto pos %f %f %f",          C_GoToPos},
 
 
-    {"camera autoswitch", C_CamAutoswitch},
-    {"camera mode",       C_CamMode},
-    {"toogle camdebug",   C_ToogleCamDebug},
-    {"toogle camera",     C_ToogleCamera},
-    {"insert %c",         C_Insert},
+    {"camera autoswitch",          C_CamAutoswitch},
+    {"camera mode",                C_CamMode},
+    {"toggle camdebug",            C_ToggleCamDebug},
+    {"toggle camera",              C_ToggleCamera},
+    {"toggle inertiatarget",       C_ToggleInertia},
+    {"insert %c",                  C_Insert},
     };
   }
 
@@ -125,7 +134,7 @@ Marvin::CmdVal Marvin::isMatch(std::string_view inp, const Cmd& cmd) const {
   CmdVal           ret  = C_Invalid;
   int              argc = 0;
 
-  for(size_t i=0; !ref.empty(); ++i) {
+  while(!ref.empty()) {
     size_t wr = ref.find(' ');
     if(wr==std::string_view::npos)
       wr = ref.size();
@@ -171,7 +180,7 @@ Marvin::CmdVal Marvin::isMatch(std::string_view inp, const Cmd& cmd) const {
       return C_Incomplete;
 
     ref = ref.substr(wr+1);
-    inp = inp.substr(wr+1);
+    inp = inp.substr(std::min(wi+1,inp.size()));
     while(inp.size()>0 && inp[0]==' ')
       inp = inp.substr(1);
     }
@@ -209,17 +218,19 @@ Marvin::CmdVal Marvin::recognize(std::string_view inp) {
   return suggestion;
   }
 
-void Marvin::autoComplete(std::string& v) {
+bool Marvin::autoComplete(std::string& v) {
   auto ret = recognize(v);
   if(ret.cmd.type==C_Incomplete && !ret.complete.empty()) {
     for(auto& i:ret.complete)
       v.push_back(i);
     if(ret.fullword)
       v.push_back(' ');
+    return true;
     }
+  return false;
   }
 
-bool Marvin::exec(const std::string& v) {
+bool Marvin::exec(std::string_view v) {
   auto ret = recognize(v);
   switch(ret.cmd.type) {
     case C_None:
@@ -233,21 +244,92 @@ bool Marvin::exec(const std::string& v) {
         }
       return true;
       }
-    case C_ToogleFrame:{
+    case C_CheatGod: {
+      auto& fnt = Resources::font();
+      if(Gothic::inst().isGodMode()) {
+        Gothic::inst().setGodMode(false);
+        Gothic::inst().onPrintScreen("Godmode off",2,4,1,fnt);
+        } else {
+        Gothic::inst().setGodMode(true);
+        Gothic::inst().onPrintScreen("Godmode on",2,4,1,fnt);
+        }
+      return true;
+      }
+    case C_Kill: {
+      Npc* player = Gothic::inst().player();
+      if(player==nullptr || player->target()==nullptr)
+        return false;
+      auto target = player->target();
+      target->changeAttribute(ATR_HITPOINTS,-target->attribute(ATR_HITPOINTSMAX),false);
+      return true;
+      }
+    case C_AiGoTo: {
+      World* world  = Gothic::inst().world();
+      Npc*   player = Gothic::inst().player();
+      if(world==nullptr || player==nullptr || !player->setInteraction(nullptr))
+        return false;
+      auto wpoint = world->findPoint(ret.argv[0]);
+      if(wpoint==nullptr)
+        return false;
+      player->aiPush(AiQueue::aiGoToPoint(*wpoint));
+      return true;
+      }
+    case C_GoToPos: {
+      Npc* player = Gothic::inst().player();
+      if(player==nullptr || !player->setInteraction(nullptr))
+        return false;
+      int c[3] = {};
+      for(int i=0; i<3; ++i) {
+        auto err = std::from_chars(ret.argv[i].data(),ret.argv[i].data()+ret.argv[i].size(),c[i]).ec;
+        if(err!=std::errc())
+          return false;
+        }
+      player->setPosition(float(c[0]),float(c[1]),float(c[2]));
+      player->updateTransform();
+      Gothic::inst().camera()->reset(player);
+      return true;
+      }
+    case C_GoToWayPoint: {
+      World* world  = Gothic::inst().world();
+      Npc*   player = Gothic::inst().player();
+      if(world==nullptr || player==nullptr || !player->setInteraction(nullptr))
+        return false;
+      auto wpoint = world->findPoint(ret.argv[0]);
+      if(wpoint==nullptr)
+        return false;
+      player->setPosition(wpoint->x,wpoint->y,wpoint->z);
+      player->updateTransform();
+      Gothic::inst().camera()->reset(player);
+      return true;
+      }
+    case C_ToggleFrame:{
       Gothic::inst().setFRate(!Gothic::inst().doFrate());
+      return true;
+      }
+    case C_ToggleTime:{
+      Gothic::inst().setClock(!Gothic::inst().doClock());
       return true;
       }
     case C_CamAutoswitch:
       return true;
     case C_CamMode:
       return true;
-    case C_ToogleCamDebug:
+    case C_ToggleCamDebug:
       if(auto c = Gothic::inst().camera())
-        c->toogleDebug();
+        c->toggleDebug();
       return true;
-    case C_ToogleCamera: {
+    case C_ToggleCamera: {
       if(auto c = Gothic::inst().camera())
-        c->setToogleEnable(!c->isToogleEnabled());
+        c->setToggleEnable(!c->isToggleEnabled());
+      return true;
+      }
+    case C_ToggleInertia: {
+      if(auto c = Gothic::inst().camera())
+        c->setInertiaTargetEnable(!c->isInertiaTargetEnabled());
+      return true;
+      }
+    case C_ToggleDesktop: {
+      Gothic::inst().toggleDesktop();
       return true;
       }
     case C_Insert: {
@@ -257,12 +339,18 @@ bool Marvin::exec(const std::string& v) {
         return false;
       return addItemOrNpcBySymbolName(world, ret.argv[0], player->position());
       }
+    case C_SetTime: {
+      World* world = Gothic::inst().world();
+      if(world==nullptr)
+        return false;
+      return setTime(*world, ret.argv[0], ret.argv[1]);
+      }
     case C_PrintVar: {
       World* world  = Gothic::inst().world();
       Npc*   player = Gothic::inst().player();
       if(world==nullptr || player==nullptr)
         return false;
-      return printVariable(world,ret.argv[0]);
+      return printVariable(world, ret.argv[0]);
       }
     }
 
@@ -271,48 +359,73 @@ bool Marvin::exec(const std::string& v) {
 
 bool Marvin::addItemOrNpcBySymbolName(World* world, std::string_view name, const Tempest::Vec3& at) {
   auto&  sc  = world->script();
-  size_t id  = sc.getSymbolIndex(name);
+  size_t id  = sc.findSymbolIndex(name);
   if(id==size_t(-1))
     return false;
 
-  auto&  sym = sc.getSymbol(id);
-  if(sym.parent==uint32_t(-1))
+  auto*  sym = sc.findSymbol(id);
+  if(sym==nullptr||sym->parent()==uint32_t(-1))
     return false;
 
-  if(sym.properties.elemProps.type!=Daedalus::EParType::EParType_Instance)
+  if(sym->type()!=phoenix::datatype::instance)
     return false;
 
-  const auto* cls = &sym;
-  while(cls->parent!=uint32_t(-1)) {
-    cls = &sc.getSymbol(cls->parent);
+  const auto* cls = sym;
+  while(cls!=nullptr&&cls->parent()!=uint32_t(-1)) {
+    cls = sc.findSymbol(cls->parent());
     }
 
-  if(cls->name=="C_NPC")
+  if (cls==nullptr)
+    return false;
+
+  if(cls->name()=="C_NPC")
     return (world->addNpc(id, at)!=nullptr);
-  if(cls->name=="C_ITEM")
+  if(cls->name()=="C_ITEM")
     return (world->addItem(id, at)!=nullptr);
   return false;
   }
 
 bool Marvin::printVariable(World* world, std::string_view name) {
+  string_frm buf;
   auto&  sc  = world->script();
-  size_t id  = sc.getSymbolIndex(name);
-  if(id==size_t(-1))
+  auto*  sym = sc.findSymbol(name);
+  if(sym==nullptr)
     return false;
-  char buf[256] = {};
-  auto&  sym = sc.getSymbol(id);
-  switch(sym.properties.elemProps.type) {
-    case Daedalus::EParType::EParType_Int:
-      std::snprintf(buf,sizeof(buf),"%.*s = %d",int(name.size()),name.data(), sym.getInt(0));
+  switch(sym->type()) {
+    case phoenix::datatype::integer:
+      buf = string_frm(name," = ",sym->get_int(0));
       break;
-    case Daedalus::EParType::EParType_Float:
-      std::snprintf(buf,sizeof(buf),"%.*s = %f",int(name.size()),name.data(), sym.getFloat(0));
+    case phoenix::datatype::float_:
+      buf = string_frm(name," = ",sym->get_float(0));
       break;
-    case Daedalus::EParType::EParType_String:
-      std::snprintf(buf,sizeof(buf),"%.*s = %s",int(name.size()),name.data(), sym.getString(0).c_str());
+    case phoenix::datatype::string:
+      buf = string_frm(name," = ",sym->get_string(0));
+      break;
+    case phoenix::datatype::instance:
+      buf = string_frm(name," = ",sym->get_instance().get());
+      break;
+    default:
       break;
     }
   print(buf);
+  return true;
+  }
+
+bool Marvin::setTime(World& world, std::string_view hh, std::string_view mm) {
+  int hv = 0, mv = 0;
+
+  auto err = std::from_chars(hh.data(), hh.data()+hh.size(), hv, 10).ec;
+  if(err!=std::errc())
+    return false;
+
+  err = std::from_chars(mm.data(), mm.data()+mm.size(), mv, 10).ec;
+  if(err!=std::errc())
+    return false;
+
+  if(hv<0 || hv>=24 || mv<0 || mv>=60)
+    return false;
+
+  world.setDayTime(hv,mv);
   return true;
   }
 
@@ -323,9 +436,9 @@ std::string_view Marvin::completeInstanceName(std::string_view inp, bool& fullwo
 
   auto&            sc    = world->script();
   std::string_view match = "";
-  for(size_t i=0; i<sc.getSymbolCount(); ++i) {
-    auto&  sym  = sc.getSymbol(i);
-    auto   name = std::string_view(sym.name);
+  for(size_t i=0; i<sc.symbolsCount(); ++i) {
+    auto*  sym  = sc.findSymbol(i);
+    auto   name = std::string_view(sym->name());
     if(!startsWith(name,inp))
       continue;
 

@@ -36,7 +36,7 @@ void AiQueue::clear() {
 
 void AiQueue::pushBack(AiAction&& a) {
   if(aiActions.size()>0) {
-    if(aiActions.back().act==AI_LookAt && a.act==AI_LookAt) {
+    if(aiActions.back().act==AI_LookAtNpc && a.act==AI_LookAtNpc) {
       aiActions.back() = a;
       return;
       }
@@ -61,7 +61,7 @@ AiQueue::AiAction AiQueue::pop() {
 int AiQueue::aiOutputOrderId() const {
   int v = std::numeric_limits<int>::max();
   for(auto& i:aiActions)
-    if(i.i0<v && (i.act==AI_Output || i.act==AI_OutputSvm || i.act==AI_OutputSvmOverlay))
+    if(i.i0<v && (i.act==AI_Output || i.act==AI_OutputSvm || i.act==AI_OutputSvmOverlay || i.act==AI_StopProcessInfo))
       v = i.i0;
   return v;
   }
@@ -72,9 +72,16 @@ void AiQueue::onWldItemRemoved(const Item& itm) {
       i.item = nullptr;
   }
 
-AiQueue::AiAction AiQueue::aiLookAt(Npc* other) {
+AiQueue::AiAction AiQueue::aiLookAt(const WayPoint* to) {
   AiAction a;
   a.act    = AI_LookAt;
+  a.point = to;
+  return a;
+  }
+
+AiQueue::AiAction AiQueue::aiLookAtNpc(Npc* other) {
+  AiAction a;
+  a.act    = AI_LookAtNpc;
   a.target = other;
   return a;
   }
@@ -105,14 +112,14 @@ AiQueue::AiAction AiQueue::aiGoToNpc(Npc *other) {
   return a;
   }
 
-AiQueue::AiAction AiQueue::aiGoToNextFp(const Daedalus::ZString& fp) {
+AiQueue::AiAction AiQueue::aiGoToNextFp(std::string_view fp) {
   AiAction a;
   a.act = AI_GoToNextFp;
   a.s0  = fp;
   return a;
   }
 
-AiQueue::AiAction AiQueue::aiStartState(ScriptFn stateFn, int behavior, Npc* other, Npc* victum, const Daedalus::ZString& wp) {
+AiQueue::AiAction AiQueue::aiStartState(ScriptFn stateFn, int behavior, Npc* other, Npc* victum, std::string_view wp) {
   AiAction a;
   a.act    = AI_StartState;
   a.func   = stateFn;
@@ -123,14 +130,14 @@ AiQueue::AiAction AiQueue::aiStartState(ScriptFn stateFn, int behavior, Npc* oth
   return a;
   }
 
-AiQueue::AiAction AiQueue::aiPlayAnim(const Daedalus::ZString& ani) {
+AiQueue::AiAction AiQueue::aiPlayAnim(std::string_view ani) {
   AiAction a;
   a.act  = AI_PlayAnim;
   a.s0   = ani;
   return a;
   }
 
-AiQueue::AiAction AiQueue::aiPlayAnimBs(const Daedalus::ZString& ani, BodyState bs) {
+AiQueue::AiAction AiQueue::aiPlayAnimBs(std::string_view ani, BodyState bs) {
   AiAction a;
   a.act  = AI_PlayAnimBs;
   a.s0   = ani;
@@ -177,7 +184,7 @@ AiQueue::AiAction AiQueue::aiEquipBestArmor() {
   return a;
   }
 
-AiQueue::AiAction AiQueue::aiEquipBestMeleWeapon() {
+AiQueue::AiAction AiQueue::aiEquipBestMeleeWeapon() {
   AiAction a;
   a.act = AI_EquipMelee;
   return a;
@@ -189,7 +196,7 @@ AiQueue::AiAction AiQueue::aiEquipBestRangeWeapon() {
   return a;
   }
 
-AiQueue::AiAction AiQueue::aiUseMob(const Daedalus::ZString& name, int st) {
+AiQueue::AiAction AiQueue::aiUseMob(std::string_view name, int st) {
   AiAction a;
   a.act = AI_UseMob;
   a.s0  = name;
@@ -225,9 +232,9 @@ AiQueue::AiAction AiQueue::aiDrawWeapon() {
   return a;
   }
 
-AiQueue::AiAction AiQueue::aiReadyMeleWeapon() {
+AiQueue::AiAction AiQueue::aiReadyMeleeWeapon() {
   AiAction a;
-  a.act = AI_DrawWeaponMele;
+  a.act = AI_DrawWeaponMelee;
   return a;
   }
 
@@ -237,16 +244,17 @@ AiQueue::AiAction AiQueue::aiReadyRangeWeapon() {
   return a;
   }
 
-AiQueue::AiAction AiQueue::aiReadySpell(int32_t spell,int32_t /*mana*/) {
+AiQueue::AiAction AiQueue::aiReadySpell(int32_t spell,int32_t mana) {
   AiAction a;
   a.act = AI_DrawSpell;
   a.i0  = spell;
+  a.i1  = mana;
   return a;
   }
 
-AiQueue::AiAction AiQueue::aiAtack() {
+AiQueue::AiAction AiQueue::aiAttack() {
   AiAction a;
-  a.act = AI_Atack;
+  a.act = AI_Attack;
   return a;
   }
 
@@ -281,7 +289,7 @@ AiQueue::AiAction AiQueue::aiProcessInfo(Npc &other) {
   return a;
   }
 
-AiQueue::AiAction AiQueue::aiOutput(Npc& to, const Daedalus::ZString& text, int order) {
+AiQueue::AiAction AiQueue::aiOutput(Npc& to, std::string_view  text, int order) {
   AiAction a;
   a.act    = AI_Output;
   a.s0     = text;
@@ -290,7 +298,7 @@ AiQueue::AiAction AiQueue::aiOutput(Npc& to, const Daedalus::ZString& text, int 
   return a;
   }
 
-AiQueue::AiAction AiQueue::aiOutputSvm(Npc &to, const Daedalus::ZString& text, int order) {
+AiQueue::AiAction AiQueue::aiOutputSvm(Npc &to, std::string_view  text, int order) {
   AiAction a;
   a.act    = AI_OutputSvm;
   a.s0     = text;
@@ -299,7 +307,7 @@ AiQueue::AiAction AiQueue::aiOutputSvm(Npc &to, const Daedalus::ZString& text, i
   return a;
   }
 
-AiQueue::AiAction AiQueue::aiOutputSvmOverlay(Npc &to, const Daedalus::ZString& text, int order) {
+AiQueue::AiAction AiQueue::aiOutputSvmOverlay(Npc &to, std::string_view  text, int order) {
   AiAction a;
   a.act    = AI_OutputSvmOverlay;
   a.s0     = text;
@@ -308,9 +316,10 @@ AiQueue::AiAction AiQueue::aiOutputSvmOverlay(Npc &to, const Daedalus::ZString& 
   return a;
   }
 
-AiQueue::AiAction AiQueue::aiStopProcessInfo() {
+AiQueue::AiAction AiQueue::aiStopProcessInfo(int order) {
   AiAction a;
   a.act = AI_StopProcessInfo;
+  a.i0  = order;
   return a;
   }
 
@@ -388,7 +397,7 @@ AiQueue::AiAction AiQueue::aiStopPointAt() {
   return a;
   }
 
-AiQueue::AiAction AiQueue::aiPrintScreen(int time, const Daedalus::ZString& font, int x,int y, const Daedalus::ZString& msg) {
+AiQueue::AiAction AiQueue::aiPrintScreen(int time, std::string_view font, int x,int y, std::string_view msg) {
   AiAction a;
   a.act    = AI_PrintScreen;
   a.i0     = x;

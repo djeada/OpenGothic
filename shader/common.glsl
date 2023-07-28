@@ -8,10 +8,17 @@ const float RPlanet  = 6360e3;       // Radius of the planet in meters
 const float RClouds  = RPlanet+3000; // Clouds height in meters
 const float RAtmos   = 6460e3;       // Radius of the atmosphere in meters
 
-const vec3  GGroundAlbedo = vec3(0.1);
-const float GSunIntensity = 20.0;
+const float Ffresnel = 0.02;
+const float IorWater = 1.0 / 1.52; // air / water
+const float IorAir   = 1.52;       // water /air
+const vec3  WaterAlbedo = vec3(0.8,0.9,1.0);
 
-float reconstructCSZ(float d, vec3 clipInfo) {
+const vec3  GGroundAlbedo = vec3(0.1);
+
+// devide photo-color by assumed sun intesity. Should be 1/scene.GSunIntensityMax
+const float PhotoLumInv   = 0.2;
+
+float linearDepth(float d, vec3 clipInfo) {
   // z_n * z_f,  z_n - z_f, z_f
   return (clipInfo[0] / (clipInfo[1] * d + clipInfo[2]));
   }
@@ -59,11 +66,51 @@ vec3 srgbEncode(vec3 color){
   return pow(color,vec3(1.0/2.2));
   }
 
-vec3 jodieReinhardTonemap(vec3 c){
-  // From: https://www.shadertoy.com/view/tdSXzD
-  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-  vec3 tc = c / (c + 1.0);
-  return mix(c / (l + 1.0), tc, tc);
+vec4 mixClr(vec4 s, vec4 d) {
+  float a  =  (1-s.a)*d.a + s.a;
+  if(a<=0.0)
+    return vec4(0);
+  vec3  c  = ((1-s.a)*d.a*d.rgb+s.a*s.rgb)/a;
+  return vec4(c,a);
+  }
+
+float interleavedGradientNoise(vec2 pixel) {
+  return fract(52.9829189f * fract(0.06711056f*float(pixel.x) + 0.00583715f*float(pixel.y)));
+  }
+
+void decodeBits(float v, out bool flt, out bool atst, out bool water) {
+  int x = int(v*255+0.5);
+
+  flt   = (x & (1 << 1))!=0;
+  atst  = (x & (1 << 2))!=0;
+  water = (x & (1 << 3))!=0;
+  }
+
+bool isGBufWater(float v) {
+  bool dummy   = false;
+  bool isWater = false;
+  decodeBits(v,dummy,dummy,isWater);
+  return isWater;
+  }
+
+float packHiZ(float z) {
+  // return z;
+  return (z-0.95)*20.0;
+  }
+
+// From https://gamedev.stackexchange.com/questions/96459/fast-ray-sphere-collision-code.
+float rayIntersect(vec3 v, vec3 d, float R) {
+  float b = dot(v, d);
+  float c = dot(v, v) - R*R;
+  if(c > 0.0f && b > 0.0)
+    return -1.0;
+  float discr = b*b - c;
+  if(discr < 0.0)
+    return -1.0;
+  // Special case: inside sphere, use far discriminant
+  if(discr > b*b)
+    return (-b + sqrt(discr));
+  return -b - sqrt(discr);
   }
 
 /*

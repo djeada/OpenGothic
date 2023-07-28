@@ -6,6 +6,7 @@
 #include <Tempest/MemWriter>
 #include <cctype>
 
+#include "utils/string_frm.h"
 #include "worldstatestorage.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
@@ -38,12 +39,15 @@ void GameSession::HeroStorage::putToWorld(World& owner, std::string_view wayPoin
 
   if(auto pl = owner.player()) {
     pl->load(sr,0);
-    if(auto pos = owner.findPoint(wayPoint)) {
-      pl->setPosition  (pos->x,pos->y,pos->z);
-      pl->setDirection (pos->dirX,pos->dirY,pos->dirZ);
-      pl->attachToPoint(pos);
-      pl->updateTransform();
+    auto pos = owner.findPoint(wayPoint);
+    if(pos==nullptr) {
+       // freemine.zen
+       pos = &owner.startPoint();
       }
+    pl->setPosition  (pos->x,pos->y,pos->z);
+    pl->setDirection (pos->dirX,pos->dirY,pos->dirZ);
+    pl->attachToPoint(pos);
+    pl->updateTransform();
     } else {
     auto ptr = std::make_unique<Npc>(owner,-1,wayPoint);
     ptr->load(sr,0);
@@ -56,6 +60,7 @@ GameSession::GameSession(std::string file) {
   cam.reset(new Camera());
 
   Gothic::inst().setLoadingProgress(0);
+  setupSettings();
   setTime(gtime(8,0));
 
   vm.reset(new GameScript(*this));
@@ -97,6 +102,7 @@ GameSession::GameSession(std::string file) {
 
 GameSession::GameSession(Serialize &fin) {
   Gothic::inst().setLoadingProgress(0);
+  setupSettings();
 
   SaveGameHeader hdr;
   fin.setEntry("header");
@@ -147,7 +153,7 @@ GameSession::GameSession(Serialize &fin) {
 GameSession::~GameSession() {
   }
 
-void GameSession::save(Serialize &fout, const char* name, const Pixmap& screen) {
+void GameSession::save(Serialize &fout, std::string_view name, const Pixmap& screen) {
   SaveGameHeader hdr;
   hdr.version   = Serialize::Version::Current;
   hdr.name      = name;
@@ -170,7 +176,7 @@ void GameSession::save(Serialize &fout, const char* name, const Pixmap& screen) 
     fout.write(i.name);
   }
 
-  fout.setEntry("priview.png");
+  fout.setEntry("preview.png");
   fout.write(screen);
 
   fout.setEntry("game/session");
@@ -197,6 +203,13 @@ void GameSession::save(Serialize &fout, const char* name, const Pixmap& screen) 
   Gothic::inst().setLoadingProgress(80);
   }
 
+void GameSession::setupSettings() {
+  constexpr const float soundScale = 2.f;
+
+  const float soundVolume = Gothic::inst().settingsGetF("SOUND","soundVolume");
+  sound.setGlobalVolume(soundVolume*soundScale);
+  }
+
 void GameSession::setWorld(std::unique_ptr<World> &&w) {
   if(wrld) {
     if(!isWorldKnown(wrld->name()))
@@ -214,7 +227,7 @@ std::unique_ptr<World> GameSession::clearWorld() {
   return std::move(wrld);
   }
 
-void GameSession::changeWorld(const std::string& world, const std::string& wayPoint) {
+void GameSession::changeWorld(std::string_view world, std::string_view wayPoint) {
   chWorld.zen = world;
   chWorld.wp  = wayPoint;
   }
@@ -247,13 +260,9 @@ Npc* GameSession::player() {
   return nullptr;
   }
 
-void GameSession::updateListenerPos(Npc &npc) {
-  auto plPos = npc.position();
-  float rot = npc.rotationRad()+float(M_PI/2.0);
-  float s   = std::sin(rot);
-  float c   = std::cos(rot);
-  sound.setListenerPosition(plPos.x,plPos.y+180/*head pos*/,plPos.z);
-  sound.setListenerDirection(c,0,s, 0,1,0);
+void GameSession::updateListenerPos(const Camera::ListenerPos& lpos) {
+  sound.setListenerPosition (lpos.pos);
+  sound.setListenerDirection(lpos.front, lpos.up);
   }
 
 void GameSession::setTime(gtime t) {
@@ -280,7 +289,6 @@ void GameSession::tick(uint64_t dt) {
     }
 
   if(!chWorld.zen.empty()) {
-    char buf[128]={};
     for(auto& c:chWorld.zen)
       c = char(std::tolower(c));
     size_t beg = chWorld.zen.rfind('\\');
@@ -295,10 +303,10 @@ void GameSession::tick(uint64_t dt) {
 
     const char *w = (beg!=std::string::npos) ? (chWorld.zen.c_str()+beg+1) : chWorld.zen.c_str();
 
-    if(Resources::vdfsIndex().hasFile(w)) {
-      std::snprintf(buf,sizeof(buf),"LOADING_%s.TGA",wname.c_str());  // format load-screen name, like "LOADING_OLDWORLD.TGA"
+    if(Resources::hasFile(w)) {
+      string_frm name("LOADING_",wname,".TGA"); // format load-screen name, like "LOADING_OLDWORLD.TGA"
 
-      Gothic::inst().startLoad(buf,[this](std::unique_ptr<GameSession>&& game){
+      Gothic::inst().startLoad(name,[this](std::unique_ptr<GameSession>&& game){
         auto ret = implChangeWorld(std::move(game),chWorld.zen,chWorld.wp);
         chWorld.zen.clear();
         return ret;
@@ -308,13 +316,13 @@ void GameSession::tick(uint64_t dt) {
   }
 
 auto GameSession::implChangeWorld(std::unique_ptr<GameSession>&& game,
-                                  const std::string& world, const std::string& wayPoint) -> std::unique_ptr<GameSession> {
-  const char*   w   = world.c_str();
-  size_t        cut = world.rfind('\\');
+                                  std::string_view world, std::string_view wayPoint) -> std::unique_ptr<GameSession> {
+  size_t           cut = world.rfind('\\');
+  std::string_view w   = world;
   if(cut!=std::string::npos)
-    w = w+cut+1;
+    w = world.substr(cut+1);
 
-  if(!Resources::vdfsIndex().hasFile(w)) {
+  if(!Resources::hasFile(w)) {
     Log::i("World not found[",world,"]");
     return std::move(game);
     }
@@ -327,6 +335,9 @@ auto GameSession::implChangeWorld(std::unique_ptr<GameSession>&& game,
   vm->resetVarPointers();
 
   const WorldStateStorage& wss = findStorage(w);
+  // Update world name for non-empty wss in case we have a mixed-case world name - otherwise wss is empty for already visited world
+  if(!wss.isEmpty())
+    w = wss.name;
 
   auto loadProgress = [](int v) {
     Gothic::inst().setLoadingProgress(v);
@@ -352,7 +363,7 @@ auto GameSession::implChangeWorld(std::unique_ptr<GameSession>&& game,
   wrld->triggerOnStart(wss.isEmpty());
 
   for(auto& i:visitedWorlds)
-    if(i.name==wrld->name()){
+    if(i.compareName(wrld->name())){
       i = std::move(visitedWorlds.back());
       visitedWorlds.pop_back();
       break;
@@ -363,9 +374,9 @@ auto GameSession::implChangeWorld(std::unique_ptr<GameSession>&& game,
   return std::move(game);
   }
 
-const WorldStateStorage& GameSession::findStorage(const std::string &name) {
+const WorldStateStorage& GameSession::findStorage(std::string_view name) {
   for(auto& i:visitedWorlds)
-    if(i.name==name)
+    if(i.compareName(name))
       return i;
   static WorldStateStorage wss;
   return wss;
@@ -376,31 +387,27 @@ void GameSession::updateAnimation(uint64_t dt) {
     wrld->updateAnimation(dt);
   }
 
-std::vector<GameScript::DlgChoise> GameSession::updateDialog(const GameScript::DlgChoise &dlg, Npc& player, Npc& npc) {
+std::vector<GameScript::DlgChoice> GameSession::updateDialog(const GameScript::DlgChoice &dlg, Npc& player, Npc& npc) {
   return vm->updateDialog(dlg,player,npc);
   }
 
-void GameSession::dialogExec(const GameScript::DlgChoise &dlg, Npc& player, Npc& npc) {
+void GameSession::dialogExec(const GameScript::DlgChoice &dlg, Npc& player, Npc& npc) {
   return vm->exec(dlg,player,npc);
   }
 
-const Daedalus::ZString& GameSession::messageFromSvm(const Daedalus::ZString& id, int voice) const {
-  if(!wrld){
-    static Daedalus::ZString empty;
-    return empty;
-    }
+std::string_view GameSession::messageFromSvm(std::string_view id, int voice) const {
+  if(!wrld)
+    return "";
   return vm->messageFromSvm(id,voice);
   }
 
-const Daedalus::ZString& GameSession::messageByName(const Daedalus::ZString& id) const {
-  if(!wrld){
-    static Daedalus::ZString empty;
-    return empty;
-    }
+std::string_view GameSession::messageByName(std::string_view id) const {
+  if(!wrld)
+    return "";
   return vm->messageByName(id);
   }
 
-uint32_t GameSession::messageTime(const Daedalus::ZString& id) const {
+uint32_t GameSession::messageTime(std::string_view id) const {
   if(!wrld)
     return 0;
   return vm->messageTime(id);
@@ -416,7 +423,7 @@ bool GameSession::aiIsDlgFinished() {
   return Gothic::inst().aiIsDlgFinished();
   }
 
-bool GameSession::isWorldKnown(const std::string &name) const {
+bool GameSession::isWorldKnown(std::string_view name) const {
   for(auto& i:visitedWorlds)
     if(i.name==name)
       return true;
@@ -424,25 +431,25 @@ bool GameSession::isWorldKnown(const std::string &name) const {
   }
 
 void GameSession::initScripts(bool firstTime) {
-  auto& wname = wrld->name();
-  auto dot    = wname.rfind('.');
-  auto name   = (dot==std::string::npos ? wname : wname.substr(0,dot));
+  auto wname = wrld->name();
+  auto dot   = wname.rfind('.');
+  auto name  = (dot==std::string::npos ? wname : wname.substr(0,dot));
 
   if(vm->hasSymbolName("startup_global"))
-    vm->runFunction("startup_global");
+    vm->getVm().call_function("startup_global");
 
   if(vm->hasSymbolName("init_global"))
-    vm->runFunction("init_global");
+    vm->getVm().call_function("init_global");
 
   if(firstTime) {
-    std::string startup = "startup_"+name;
+    string_frm startup("startup_", name);
     if(vm->hasSymbolName(startup))
-      vm->runFunction(startup);
+      vm->getVm().call_function(startup);
     }
 
-  std::string init = "init_"+name;
+  string_frm init("init_",name);
   if(vm->hasSymbolName(init))
-    vm->runFunction(init);
+    vm->getVm().call_function(init);
 
   wrld->resetPositionToTA();
   }

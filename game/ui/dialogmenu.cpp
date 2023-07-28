@@ -5,6 +5,7 @@
 #include <algorithm>
 
 #include "utils/gthfont.h"
+#include "utils/string_frm.h"
 #include "world/objects/npc.h"
 #include "gothic.h"
 #include "inventorymenu.h"
@@ -12,19 +13,19 @@
 
 using namespace Tempest;
 
-bool DialogMenu::Pipe::output(Npc &npc, const Daedalus::ZString& text) {
+bool DialogMenu::Pipe::output(Npc &npc, std::string_view text) {
   return owner.aiOutput(npc,text);
   }
 
-bool DialogMenu::Pipe::outputSvm(Npc &npc, const Daedalus::ZString& text) {
+bool DialogMenu::Pipe::outputSvm(Npc &npc, std::string_view text) {
   return owner.aiOutput(npc,text);
   }
 
-bool DialogMenu::Pipe::outputOv(Npc &npc, const Daedalus::ZString& text) {
+bool DialogMenu::Pipe::outputOv(Npc &npc, std::string_view text) {
   return owner.aiOutput(npc,text);
   }
 
-bool DialogMenu::Pipe::printScr(Npc& npc, int time, const Daedalus::ZString& msg, int x, int y, const Daedalus::ZString& font) {
+bool DialogMenu::Pipe::printScr(Npc& npc, int time, std::string_view msg, int x, int y, std::string_view font) {
   return owner.aiPrintScr(npc,time,msg,x,y,font);
   }
 
@@ -76,14 +77,14 @@ void DialogMenu::tick(uint64_t dt) {
     remPrint-=dt;
     }
 
-  if(isChoiseMenuActive()) {
-    if(choiseAnimTime+dt>ANIM_TIME)
-      choiseAnimTime = ANIM_TIME; else
-      choiseAnimTime+=dt;
+  if(isChoiceMenuActive()) {
+    if(choiceAnimTime+dt>ANIM_TIME)
+      choiceAnimTime = ANIM_TIME; else
+      choiceAnimTime+=dt;
     } else {
-    if(choiseAnimTime<dt)
-      choiseAnimTime = 0; else
-      choiseAnimTime-=dt;
+    if(choiceAnimTime<dt)
+      choiceAnimTime = 0; else
+      choiceAnimTime-=dt;
     }
 
   if(current.time<=dt){
@@ -91,7 +92,7 @@ void DialogMenu::tick(uint64_t dt) {
     if(dlgTrade && !haveToWaitOutput()) {
       startTrade();
       }
-    else if(choise.size()==0 && state!=State::Idle && !haveToWaitOutput()) {
+    else if(choice.size()==0 && state!=State::Idle && !haveToWaitOutput()) {
       close();
       }
     } else {
@@ -111,13 +112,13 @@ void DialogMenu::tick(uint64_t dt) {
   update();
   }
 
-void DialogMenu::drawTextMultiline(Painter &p, int x, int y, int w, int h, const std::string &txt, bool isPl) {
+void DialogMenu::drawTextMultiline(Painter &p, int x, int y, int w, int h, std::string_view txt, bool isPl) {
   auto sz = processTextMultiline(nullptr,0,0,w,h,txt,isPl);
   y+=std::max(0, (h-sz.h)/2);
   processTextMultiline(&p,x,y,w,h,txt,isPl);
   }
 
-Size DialogMenu::processTextMultiline(Painter* p, int x, int y, int w, int h, const std::string& txt, bool isPl) {
+Size DialogMenu::processTextMultiline(Painter* p, int x, int y, int w, int h, std::string_view txt, bool isPl) {
   const int pdd=10;
 
   Size ret = {0,0};
@@ -128,7 +129,7 @@ Size DialogMenu::processTextMultiline(Painter* p, int x, int y, int w, int h, co
       fnt.drawText(*p,x+pdd, y,
                    w-2*pdd, h, txt, Tempest::AlignHCenter);
       }
-    auto sz = fnt.textSize(w,txt.c_str());
+    auto sz = fnt.textSize(w,txt);
     ret.w  = std::max(ret.w,sz.w);
     ret.h += sz.h;
     } else {
@@ -150,7 +151,7 @@ Size DialogMenu::processTextMultiline(Painter* p, int x, int y, int w, int h, co
       fnt.drawText(*p,x+pdd, y,
                    w-2*pdd, h, txt, Tempest::AlignHCenter);
       }
-    auto sz = fnt.textSize(w,txt.c_str());
+    auto sz = fnt.textSize(w,txt);
     ret.w  = std::max(ret.w,sz.w);
     ret.h += sz.h;
     }
@@ -181,15 +182,15 @@ void DialogMenu::dialogCamera(Camera& camera) {
     p0 -= p1;
 
     if(pl==other) {
-      float a = pl->rotation();
-      camera.setSpin(PointF(0,a));
+      // float a = pl->rotation();
+      // camera.setSpin(PointF(0,a));
       } else {
       float l = p0.length();
       float a = 0;
       if(curentIsPl) {
-        a = pl->rotation()+45-270;
+        a = other->rotation()-45;
         } else {
-        a = other->rotation()-45+270;
+        a = pl->rotation()+45;
         }
 
       camera.setDialogDistance(l);
@@ -205,9 +206,9 @@ void DialogMenu::openPipe(Npc &player, Npc &npc, AiOuputPipe *&out) {
   state  = State::PreStart;
   }
 
-bool DialogMenu::aiOutput(Npc &npc, const Daedalus::ZString& msg) {
+bool DialogMenu::aiOutput(Npc &npc, std::string_view msg) {
   if(&npc!=pl && &npc!=other){
-    Log::e("unexpected aiOutput call: ",msg.c_str());
+    Log::e("unexpected aiOutput call: ",msg.data());
     return true;
     }
 
@@ -222,10 +223,10 @@ bool DialogMenu::aiOutput(Npc &npc, const Daedalus::ZString& msg) {
       pl->stopDlgAnim();
     }
 
-  current.txt     = Gothic::inst().messageByName(msg).c_str();
+  current.txt     = Gothic::inst().messageByName(msg);
   current.msgTime = Gothic::inst().messageTime(msg);
   current.time    = current.msgTime + (dlgAnimation ? ANIM_TIME*2 : 0);
-  currentSnd      = soundDevice.load(Resources::loadSoundBuffer(std::string(msg.c_str())+".wav"));
+  currentSnd      = soundDevice.load(Resources::loadSoundBuffer(string_frm(msg,".wav")));
   curentIsPl      = (pl==&npc);
 
   currentSnd.play();
@@ -234,11 +235,11 @@ bool DialogMenu::aiOutput(Npc &npc, const Daedalus::ZString& msg) {
   return true;
   }
 
-bool DialogMenu::aiPrintScr(Npc& npc, int time, const Daedalus::ZString& msg, int x, int y, const Daedalus::ZString& font) {
+bool DialogMenu::aiPrintScr(Npc& npc, int time, std::string_view msg, int x, int y, std::string_view font) {
   if(current.time>0)
     return false;
-  auto& f = Resources::font(font.c_str());
-  Gothic::inst().onPrintScreen(msg.c_str(),x,y,time,f);
+  auto& f = Resources::font(font);
+  Gothic::inst().onPrintScreen(msg,x,y,time,f);
   return true;
   }
 
@@ -247,7 +248,7 @@ bool DialogMenu::aiClose() {
     return false;
     }
 
-  choise.clear();
+  choice.clear();
   close();
   state=State::Idle;
   update();
@@ -262,16 +263,20 @@ bool DialogMenu::isActive() const {
   return (state!=State::Idle) || current.time>0;
   }
 
+bool DialogMenu::hasContent() const {
+  return (current.time>0 || choice.size()>0);
+  }
+
 bool DialogMenu::onStart(Npc &p, Npc &ot) {
-  choise         = ot.dialogChoises(p,except,state==State::PreStart);
+  choice         = ot.dialogChoices(p,except,state==State::PreStart);
   state          = State::Active;
   depth          = 0;
   curentIsPl     = true;
-  choiseAnimTime = 0;
+  choiceAnimTime = 0;
 
-  if(choise.size()>0 && choise[0].title.size()==0){
+  if(choice.size()>0 && choice[0].title.size()==0){
     // important dialog
-    onEntry(choise[0]);
+    onEntry(choice[0]);
     }
 
   dlgSel=0;
@@ -308,9 +313,9 @@ void DialogMenu::print(std::string_view msg) {
   }
 
 void DialogMenu::onDoneText() {
-  choise = Gothic::inst().updateDialog(selected,*pl,*other);
+  choice = Gothic::inst().updateDialog(selected,*pl,*other);
   dlgSel = 0;
-  if(choise.size()==0){
+  if(choice.size()==0){
     if(depth>0) {
       onStart(*pl,*other);
       } else {
@@ -328,7 +333,7 @@ void DialogMenu::close() {
   depth=0;
   dlgTrade=false;
   current.time=0;
-  choise.clear();
+  choice.clear();
   state=State::Idle;
   currentSnd = SoundEffect();
   update();
@@ -373,7 +378,7 @@ void DialogMenu::skipPhrase() {
     }
   }
 
-void DialogMenu::onEntry(const GameScript::DlgChoise &e) {
+void DialogMenu::onEntry(const GameScript::DlgChoice &e) {
   if(pl && other) {
     selected = e;
     depth    = 1;
@@ -416,7 +421,7 @@ void DialogMenu::paintEvent(Tempest::PaintEvent &e) {
       drawTextMultiline(p,(w()-dw)/2,20,dw,dh,current.txt,curentIsPl);
     }
 
-  paintChoise(e);
+  paintChoice(e);
 
   for(size_t i=0;i<MAX_PRINT;++i){
     auto& sc  = printMsg[i];
@@ -451,26 +456,26 @@ void DialogMenu::paintEvent(Tempest::PaintEvent &e) {
     }
   }
 
-void DialogMenu::paintChoise(PaintEvent &e) {
-  if(choise.size()==0)
+void DialogMenu::paintChoice(PaintEvent &e) {
+  if(choice.size()==0)
     return;
 
   auto& fnt = Resources::dialogFont();
   const int  padd     = 20;
   const int  dw       = std::min(w(),600);
-  const bool isActive = isChoiseMenuActive();
+  const bool isActive = isChoiceMenuActive();
 
   int  dh = padd*2;
-  for(size_t i=0;i<choise.size();++i){
+  for(size_t i=0;i<choice.size();++i){
     const GthFont* font = &fnt;
-    Size choiseTextSize = font->textSize(dw-padd, choise[i].title.c_str());
-    dh += choiseTextSize.h;
+    Size choiceTextSize = font->textSize(dw-padd, choice[i].title);
+    dh += choiceTextSize.h;
     }
 
   const int  y        = h()-dh-20;
 
-  if(tex!=nullptr && (choiseAnimTime>0 || isActive)) {
-    float k    = dlgAnimation ? (float(choiseAnimTime)/float(ANIM_TIME)) : 1.f;
+  if(tex!=nullptr && (choiceAnimTime>0 || isActive)) {
+    float k    = dlgAnimation ? (float(choiceAnimTime)/float(ANIM_TIME)) : 1.f;
     int   dlgW = int(float(dw)*k);
     int   dlgH = int(float(dh)*k);
 
@@ -480,27 +485,27 @@ void DialogMenu::paintChoise(PaintEvent &e) {
                0,0,tex->w(),tex->h());
     }
 
-  if(choiseAnimTime<ANIM_TIME && dlgAnimation)
+  if(choiceAnimTime<ANIM_TIME && dlgAnimation)
     return;
 
-  if(!isChoiseMenuActive())
+  if(!isChoiceMenuActive())
     return;
 
   int textHeightOffset = padd;
   Painter p(e);
-  for(size_t i=0;i<choise.size();++i){
+  for(size_t i=0;i<choice.size();++i){
     const GthFont* font = &fnt;
     int x = (w()-dw)/2;
     if(i==dlgSel)
       font = &Resources::font(Resources::FontType::Hi);
-    Size choiseTextSize = font->textSize(dw-padd, choise[i].title.c_str());
-    font->drawText(p,x+padd,y+padd+textHeightOffset,dw-padd,0,choise[i].title,AlignLeft);
-    textHeightOffset += choiseTextSize.h;
+    Size choiceTextSize = font->textSize(dw-padd, choice[i].title);
+    font->drawText(p,x+padd,y+padd+textHeightOffset,dw-padd,0,choice[i].title,AlignLeft);
+    textHeightOffset += choiceTextSize.h;
     }
   }
 
-bool DialogMenu::isChoiseMenuActive() const {
-  return choise.size()!=0 && current.time==0 && !haveToWaitOutput() && trade.isOpen()==InventoryMenu::State::Closed;
+bool DialogMenu::isChoiceMenuActive() const {
+  return choice.size()!=0 && current.time==0 && !haveToWaitOutput() && trade.isOpen()==InventoryMenu::State::Closed;
   }
 
 void DialogMenu::onSelect() {
@@ -508,9 +513,9 @@ void DialogMenu::onSelect() {
     return;
     }
 
-  if(dlgSel<choise.size()) {
-    onEntry(choise[dlgSel]);
-    choiseAnimTime = dlgAnimation ? ANIM_TIME : 0;
+  if(dlgSel<choice.size()) {
+    onEntry(choice[dlgSel]);
+    choiceAnimTime = dlgAnimation ? ANIM_TIME : 0;
     }
   }
 
@@ -538,7 +543,7 @@ void DialogMenu::mouseWheelEvent(MouseEvent &e) {
     dlgSel--;
   if(e.delta<0)
     dlgSel++;
-  dlgSel = (dlgSel+choise.size())%std::max<size_t>(choise.size(),1);
+  dlgSel = (dlgSel+choice.size())%std::max<size_t>(choice.size(),1);
   update();
   }
 
@@ -562,7 +567,7 @@ void DialogMenu::keyDownEvent(KeyEvent &e) {
     if(e.key==Event::K_ESCAPE){
       skipPhrase();
       }
-    dlgSel = (dlgSel+choise.size())%std::max<size_t>(choise.size(),1);
+    dlgSel = (dlgSel+choice.size())%std::max<size_t>(choice.size(),1);
     update();
     return;
     }

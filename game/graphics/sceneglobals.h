@@ -4,9 +4,11 @@
 #include <Tempest/Vec>
 #include <list>
 
-#include "lightsource.h"
+#include "graphics/dynamic/frustrum.h"
 #include "lightgroup.h"
 #include "bindless.h"
+
+class Sky;
 
 class SceneGlobals final {
   public:
@@ -24,12 +26,16 @@ class SceneGlobals final {
     void setViewProject(const Tempest::Matrix4x4& view, const Tempest::Matrix4x4& proj,
                         float zNear, float zFar,
                         const Tempest::Matrix4x4 *sh);
-    void setSunlight(const LightSource& light, const Tempest::Vec3& ambient);
+    void setViewLwc(const Tempest::Matrix4x4& view, const Tempest::Matrix4x4& proj, const Tempest::Matrix4x4 *sh);
+    void setSky(const Sky& s);
+    void setUnderWater(bool w);
 
     void setTime(uint64_t time);
     void commitUbo(uint8_t fId);
+    void prepareGlobals(Tempest::Encoder<Tempest::CommandBuffer> &cmd, uint8_t frameId);
 
     void setResolution(uint32_t w, uint32_t h);
+    void setHiZ(const Tempest::Texture2d& hiZ);
     void setShadowMap(const Tempest::Texture2d* tex[]);
 
     const Tempest::Matrix4x4& viewProject() const;
@@ -37,15 +43,22 @@ class SceneGlobals final {
     const Tempest::Matrix4x4& viewShadow(uint8_t view) const;
     const Tempest::Vec3       clipInfo() const;
 
+    const Tempest::Matrix4x4  viewProjectLwc() const;
+    const Tempest::Matrix4x4  viewProjectLwcInv() const;
+
     uint64_t                          tickCount = 0;
     const Tempest::Texture2d*         shadowMap[2] = {};
 
     Tempest::Matrix4x4                view, proj;
+    Tempest::Matrix4x4                viewLwc;
+    Tempest::Vec3                     originLwc;
 
-    const Tempest::Texture2d*         gbufEmission = &Resources::fallbackBlack();
+    const Tempest::Texture2d*         sceneColor   = &Resources::fallbackBlack();
+    const Tempest::Texture2d*         sceneDepth   = &Resources::fallbackBlack();
+    const Tempest::Texture2d*         zbuffer      = &Resources::fallbackBlack();
+
     const Tempest::Texture2d*         gbufDiffuse  = &Resources::fallbackBlack();
     const Tempest::Texture2d*         gbufNormals  = &Resources::fallbackBlack();
-    const Tempest::Texture2d*         gbufDepth    = &Resources::fallbackBlack();
 
     const Tempest::Texture2d*         hiZ          = &Resources::fallbackTexture();
     const Tempest::Texture2d*         skyLut       = &Resources::fallbackTexture();
@@ -53,23 +66,39 @@ class SceneGlobals final {
     const Tempest::AccelerationStructure* tlas = nullptr;
 
     struct UboGlobal final {
-      Tempest::Vec3                   sunDir     = {0,0,1};
-      float                           padd0      = 0;
       Tempest::Matrix4x4              viewProject;
       Tempest::Matrix4x4              viewProjectInv;
       Tempest::Matrix4x4              viewShadow[Resources::ShadowLayers];
-      Tempest::Vec4                   lightAmb   = {0,0,0,0};
-      Tempest::Vec4                   lightCl    = {1,1,1,0};
+      Tempest::Matrix4x4              viewProjectLwcInv;
+      Tempest::Matrix4x4              viewShadowLwc[Resources::ShadowLayers];
+      Tempest::Matrix4x4              view, project;
+      Tempest::Vec3                   sunDir        = {0,0,1};
+      float                           waveAnim      = 0;
+      Tempest::Vec3                   lightAmb      = {1,1,1};
+      float                           exposure      = 1;
+      Tempest::Vec3                   lightCl       = {0,0,0};
+      float                           GSunIntensity = 0;
       Tempest::Vec4                   frustrum[6];
       Tempest::Vec3                   clipInfo;
-      float                           padd1 = 0;
+      uint32_t                        tickCount32 = 0;
       Tempest::Vec3                   camPos;
-      float                           padd2 = 0;
+      float                           isNight = 0;
       Tempest::Vec2                   screenResInv;
       Tempest::Vec2                   closeupShadowSlice;
+
+      Tempest::Vec3                   pfxLeft  = {};
+      uint32_t                        underWater = 0;
+      Tempest::Vec3                   pfxTop   = {};
+      float                           padd2 = 0;
+      Tempest::Vec3                   pfxDepth = {};
+      float                           padd3 = 0;
+      Tempest::Point                  hiZTileSize = {};
+      Tempest::Point                  screenRes = {};
+      Tempest::Vec2                   cloudsDir[2] = {};
       };
 
     Tempest::UniformBuffer<UboGlobal> uboGlobalPf[Resources::MaxFramesInFlight][V_Count];
+    Tempest::StorageBuffer            uboGlobal[V_Count];
 
     LightGroup                        lights;
     Frustrum                          frustrum[V_Count];
@@ -84,6 +113,7 @@ class SceneGlobals final {
   private:
     void                              initSettings();
 
-    UboGlobal                         uboGlobal;
+    UboGlobal                         uboGlobalCpu;
+    Tempest::DescriptorSet            uboCopy[Resources::MaxFramesInFlight][V_Count];
   };
 

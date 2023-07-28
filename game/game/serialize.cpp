@@ -9,6 +9,8 @@
 
 #include <Tempest/MemReader>
 #include <Tempest/MemWriter>
+#include <Tempest/Log>
+#include <Tempest/Application>
 
 size_t Serialize::writeFunc(void* pOpaque, uint64_t file_ofs, const void* pBuf, size_t n) {
   auto& self = *reinterpret_cast<Serialize*>(pOpaque);
@@ -50,7 +52,13 @@ size_t Serialize::readFunc(void* pOpaque, uint64_t file_ofs, void* pBuf, size_t 
 
 Serialize::Serialize() {}
 
+//static uint64_t time0 = 0;
+
 Serialize::Serialize(Tempest::ODevice& fout) : fout(&fout) {
+  //time0 = Tempest::Application::tickCount();
+  entryBuf .reserve(1*1024*1024);
+  entryName.reserve(256);
+
   impl.m_pWrite           = Serialize::writeFunc;
   impl.m_pIO_opaque       = this;
   impl.m_zip_type         = MZ_ZIP_TYPE_USER;
@@ -58,6 +66,9 @@ Serialize::Serialize(Tempest::ODevice& fout) : fout(&fout) {
   }
 
 Serialize::Serialize(Tempest::IDevice& fin) : fin(&fin) {
+  entryBuf .resize(1*1024*1024);
+  entryName.reserve(256);
+
   impl.m_pRead            = Serialize::readFunc;
   impl.m_pIO_opaque       = this;
   impl.m_zip_type         = MZ_ZIP_TYPE_USER;
@@ -66,8 +77,11 @@ Serialize::Serialize(Tempest::IDevice& fin) : fin(&fin) {
 
 Serialize::~Serialize() {
   closeEntry();
-  mz_zip_writer_finalize_archive(&impl);
-  mz_zip_writer_end(&impl);
+  if(fout!=nullptr) {
+    mz_zip_writer_finalize_archive(&impl);
+    mz_zip_writer_end(&impl);
+    //Tempest::Log::d("save time = ", Tempest::Application::tickCount()-time0);
+    }
   }
 
 std::string_view Serialize::worldName() const {
@@ -90,11 +104,19 @@ void Serialize::closeEntry() {
     throw std::runtime_error("unable to write entry in game archive");
   }
 
-bool Serialize::implSetEntry(std::string fname) {
-  closeEntry();
-  entryName = std::move(fname);
+bool Serialize::implSetEntry(std::string_view fname) {
+  size_t prefix = 0;
   if(fout!=nullptr) {
-    for(size_t i=0; i<entryName.size(); ++i) {
+    while(prefix<fname.size() && prefix<entryName.size()) {
+      if(entryName[prefix]!=fname[prefix])
+        break;
+      ++prefix;
+      }
+    }
+  closeEntry();
+  entryName = fname;
+  if(fout!=nullptr) {
+    for(size_t i=prefix; i<entryName.size(); ++i) {
       if(entryName[i]=='/' && i+1<entryName.size()) {
         const char prev = entryName[i+1];
         entryName[i+1] = '\0';
@@ -125,7 +147,7 @@ bool Serialize::implSetEntry(std::string fname) {
   return false;
   }
 
-uint32_t Serialize::implDirectorySize(std::string e) {
+uint32_t Serialize::implDirectorySize(std::string_view e) {
   // Get and print information about each file in the archive.
   uint32_t cnt = 0;
   for(mz_uint i = 0; i<mz_zip_reader_get_num_files(&impl); i++) {
@@ -143,6 +165,8 @@ uint32_t Serialize::implDirectorySize(std::string e) {
   }
 
 void Serialize::writeBytes(const void* buf, size_t sz) {
+  if(sz==0)
+    return;
   size_t at = entryBuf.size();
   entryBuf.resize(entryBuf.size()+sz);
   std::memcpy(&entryBuf[at],buf,sz);
@@ -173,18 +197,6 @@ void Serialize::implWrite(std::string_view s) {
   uint32_t sz=uint32_t(s.size());
   implWrite(sz);
   writeBytes(s.data(),sz);
-  }
-
-void Serialize::implWrite(const Daedalus::ZString& s) {
-  uint32_t sz=uint32_t(s.size());
-  implWrite(sz);
-  writeBytes(s.c_str(),sz);
-  }
-
-void Serialize::implRead(Daedalus::ZString& s) {
-  std::string rs;
-  implRead(rs);
-  s = Daedalus::ZString(std::move(rs));
   }
 
 void Serialize::implWrite(WeaponState w) {
@@ -262,6 +274,7 @@ void Serialize::implRead(SaveGameHeader& p) {
 
 void Serialize::implWrite(const Tempest::Pixmap& p) {
   std::vector<uint8_t> tmp;
+  tmp.reserve(4*1024*1024);
   Tempest::MemWriter w{tmp};
   p.save(w);
   writeBytes(tmp.data(),tmp.size());
@@ -273,34 +286,42 @@ void Serialize::implRead(Tempest::Pixmap& p) {
   readOffset += r.cursorPosition();
   }
 
-void Serialize::implWrite(const Daedalus::GEngineClasses::C_Npc& h) {
-  write(uint32_t(h.instanceSymbol));
-  write(h.id,h.name,h.slot,h.effect,int32_t(h.npcType));
+void Serialize::implWrite(const phoenix::c_npc& h) {
+  write(uint32_t(h.symbol_index()));
+  write(h.id,h.name,h.slot,h.effect,int32_t(h.type));
   write(int32_t(h.flags));
-  write(h.attribute,h.hitChance,h.protection,h.damage);
-  write(h.damagetype,h.guild,h.level);
+  write(h.attribute,h.hitchance,h.protection,h.damage);
+  write(h.damage_type,h.guild,h.level);
   write(h.mission);
-  write(h.fight_tactic,h.weapon,h.voice,h.voicePitch,h.bodymass);
+  write(h.fight_tactic,h.weapon,h.voice,h.voice_pitch,h.body_mass);
   write(h.daily_routine,h.start_aistate);
-  write(h.spawnPoint,h.spawnDelay,h.senses,h.senses_range);
+  write(h.spawnpoint,h.spawn_delay,h.senses,h.senses_range);
   write(h.aivar);
-  write(h.wp,h.exp,h.exp_next,h.lp,h.bodyStateInterruptableOverride,h.noFocus);
+  write(h.wp,h.exp,h.exp_next,h.lp,h.bodystate_interruptable_override,h.no_focus);
   }
 
-void Serialize::implRead(Daedalus::GEngineClasses::C_Npc& h) {
+void Serialize::readNpc(phoenix::vm& vm, std::shared_ptr<phoenix::c_npc>& h) {
   uint32_t instanceSymbol=0;
+  read(instanceSymbol);
 
-  read(instanceSymbol); h.instanceSymbol = instanceSymbol;
-  read(h.id,h.name,h.slot,h.effect, reinterpret_cast<int32_t&>(h.npcType));
-  read(reinterpret_cast<int32_t&>(h.flags));
-  read(h.attribute,h.hitChance,h.protection,h.damage);
-  read(h.damagetype,h.guild,h.level);
-  read(h.mission);
-  read(h.fight_tactic,h.weapon,h.voice,h.voicePitch,h.bodymass);
-  read(h.daily_routine,h.start_aistate);
-  read(h.spawnPoint,h.spawnDelay,h.senses,h.senses_range);
-  read(h.aivar);
-  read(h.wp,h.exp,h.exp_next,h.lp,h.bodyStateInterruptableOverride,h.noFocus);
+  auto sym = vm.find_symbol_by_index(instanceSymbol);
+
+  if (sym != nullptr) {
+    vm.allocate_instance(h, sym);
+    } else {
+    Tempest::Log::e("Cannot load serialized NPC ", instanceSymbol, ": Symbol not found.");
+    }
+
+  read(h->id,h->name,h->slot,h->effect, reinterpret_cast<int32_t&>(h->type));
+  read(reinterpret_cast<int32_t&>(h->flags));
+  read(h->attribute,h->hitchance,h->protection,h->damage);
+  read(h->damage_type,h->guild,h->level);
+  read(h->mission);
+  read(h->fight_tactic,h->weapon,h->voice,h->voice_pitch,h->body_mass);
+  read(h->daily_routine,h->start_aistate);
+  read(h->spawnpoint,h->spawn_delay,h->senses,h->senses_range);
+  read(h->aivar);
+  read(h->wp,h->exp,h->exp_next,h->lp,h->bodystate_interruptable_override,h->no_focus);
   }
 
 void Serialize::implWrite(const FpLock &fp) {
@@ -309,4 +330,17 @@ void Serialize::implWrite(const FpLock &fp) {
 
 void Serialize::implRead(FpLock &fp) {
   fp.load(*this);
+  }
+
+void Serialize::implWrite(const phoenix::animation_sample &i) {
+  writeBytes(&i,sizeof(i));
+  }
+
+void Serialize::implRead(phoenix::animation_sample &i) {
+  if (version() < 40) {
+    read(i.position.x,i.position.y,i.position.z);
+    read(i.rotation.x,i.rotation.y,i.rotation.z,i.rotation.w);
+    } else {
+    readBytes (&i,sizeof(i));
+    }
   }

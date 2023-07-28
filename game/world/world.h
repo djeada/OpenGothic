@@ -6,21 +6,17 @@
 #include <string>
 #include <functional>
 
-#include <daedalus/DaedalusVM.h>
-#include <zenload/zTypes.h>
-#include <zenload/zTypes.h>
+#include <phoenix/world.hh>
 
 #include "graphics/worldview.h"
 #include "graphics/lightgroup.h"
 #include "graphics/meshobjects.h"
 #include "game/gamescript.h"
 #include "physics/dynamicworld.h"
-#include "triggers/trigger.h"
 #include "worldobjects.h"
 #include "worldsound.h"
 #include "waypoint.h"
 #include "waymatrix.h"
-#include "resources.h"
 
 class GameSession;
 class Focus;
@@ -36,18 +32,14 @@ class World final {
   public:
     World()=delete;
     World(const World&)=delete;
-    World(GameSession& game, std::string file, bool startup, std::function<void(int)> loadProgress);
+    World(GameSession& game, std::string_view file, bool startup, std::function<void(int)> loadProgress);
     ~World();
-
-    struct BspSector final {
-      int32_t guild=GIL_NONE;
-      };
 
     void                 createPlayer(std::string_view cls);
     void                 insertPlayer(std::unique_ptr<Npc>&& npc, std::string_view waypoint);
     void                 setPlayer(Npc* npc);
     void                 postInit();
-    const std::string&   name() const { return wname; }
+    std::string_view     name() const { return wname; }
 
     void                 load(Serialize& fin );
     void                 save(Serialize& fout);
@@ -72,6 +64,7 @@ class World final {
     const WayPoint*      findNextFreePoint(const Npc& pos, std::string_view name) const;
     const WayPoint*      findNextPoint(const WayPoint& pos) const;
 
+    const WayPoint&      startPoint() const;
     const WayPoint&      deadPoint() const;
 
     void                 detectNpcNear(std::function<void(Npc&)> f);
@@ -96,15 +89,15 @@ class World final {
     void                 runEffect(Effect&& e);
     void                 stopEffect(const VisualFx& vfx);
 
-    GlobalFx             addGlobalEffect(const Daedalus::ZString& what, uint64_t len, const Daedalus::ZString* argv, size_t argc);
+    GlobalFx             addGlobalEffect(std::string_view what, uint64_t len, const std::string* argv, size_t argc);
     MeshObjects::Mesh    addView(std::string_view visual) const;
     MeshObjects::Mesh    addView(std::string_view visual, int32_t headTex, int32_t teetTex, int32_t bodyColor) const;
-    MeshObjects::Mesh    addView(const Daedalus::GEngineClasses::C_Item& itm);
+    MeshObjects::Mesh    addView(const phoenix::c_item& itm);
     MeshObjects::Mesh    addView(const ProtoMesh* visual);
     MeshObjects::Mesh    addAtachView (const ProtoMesh::Attach& visual, const int32_t version);
     MeshObjects::Mesh    addStaticView(const ProtoMesh* visual, bool staticDraw);
     MeshObjects::Mesh    addStaticView(std::string_view visual);
-    MeshObjects::Mesh    addDecalView (const ZenLoad::zCVobData& vob);
+    MeshObjects::Mesh    addDecalView (const phoenix::vob& vob);
 
     void                 updateAnimation(uint64_t dt);
     void                 resetPositionToTA();
@@ -112,7 +105,7 @@ class World final {
     auto                 takeHero() -> std::unique_ptr<Npc>;
     Npc*                 player() const { return npcPlayer; }
     Npc*                 findNpcByInstance(size_t instance);
-    auto                 roomAt(const Tempest::Vec3& arr) -> const std::string&;
+    std::string_view     roomAt(const Tempest::Vec3& arr);
 
     void                 scaleTime(uint64_t& dt);
     void                 tick(uint64_t dt);
@@ -127,22 +120,22 @@ class World final {
 
     void                 triggerOnStart(bool firstTime);
     void                 triggerEvent(const TriggerEvent& e);
-    void                 triggerChangeWorld(const std::string &world, const std::string &wayPoint);
+    void                 triggerChangeWorld(std::string_view world, std::string_view wayPoint);
     void                 execTriggerEvent(const TriggerEvent& e);
     void                 enableTicks (AbstractTrigger& t);
     void                 disableTicks(AbstractTrigger& t);
     void                 enableCollizionZone (CollisionZone& z);
     void                 disableCollizionZone(CollisionZone& z);
 
-    Interactive*         aviableMob(const Npc &pl, const char* name);
+    Interactive*         availableMob(const Npc &pl, std::string_view name);
     Interactive*         findInteractive(const Npc& pl);
-    void                 setMobRoutine(gtime time, const Daedalus::ZString& scheme, int32_t state);
+    void                 setMobRoutine(gtime time, std::string_view scheme, int32_t state);
 
     void                 marchInteractives(DbgPainter& p) const;
     void                 marchPoints      (DbgPainter& p) const;
 
     AiOuputPipe*         openDlgOuput(Npc &player, Npc &npc);
-    void                 aiOutputSound(Npc &player, const std::string& msg);
+    void                 aiOutputSound(Npc &player, std::string_view msg);
     bool                 aiIsDlgFinished();
 
     bool                 isTargeted (Npc& npc);
@@ -150,12 +143,12 @@ class World final {
     Npc*                 addNpc     (size_t itemInstance,   std::string_view     at);
     Npc*                 addNpc     (size_t itemInstance,   const Tempest::Vec3& at);
     Item*                addItem    (size_t itemInstance,   std::string_view     at);
-    Item*                addItem    (const ZenLoad::zCVobData& vob);
+    Item*                addItem    (const phoenix::vobs::item& vob);
     Item*                addItem    (size_t itemInstance, const Tempest::Vec3&      pos);
     Item*                addItemDyn (size_t itemInstance, const Tempest::Matrix4x4& pos, size_t owner);
     auto                 takeItem(Item& it) -> std::unique_ptr<Item>;
     void                 removeItem (Item &it);
-    size_t               hasItems(const char* tag, size_t itemCls);
+    size_t               hasItems(std::string_view tag, size_t itemCls);
 
     Bullet&              shootBullet(const Item &itmId, const Npc& npc, const Npc* target, const Interactive* inter);
     Bullet&              shootSpell(const Item &itm, const Npc &npc, const Npc *target);
@@ -170,24 +163,33 @@ class World final {
 
     Sound                addWeaponHitEffect(Npc&         src, const Bullet* srcArrow, Npc&  reciver);
     Sound                addWeaponBlkEffect(ItemMaterial src, ItemMaterial           reciver, const Tempest::Matrix4x4& pos);
-    Sound                addLandHitEffect  (ItemMaterial src, ZenLoad::MaterialGroup reciver, const Tempest::Matrix4x4& pos);
+    Sound                addLandHitEffect  (ItemMaterial src, phoenix::material_group reciver, const Tempest::Matrix4x4& pos);
 
     void                 addTrigger    (AbstractTrigger* trigger);
     void                 addInteractive(Interactive* inter);
     void                 addStartPoint (const Tempest::Vec3& pos, const Tempest::Vec3& dir, std::string_view name);
     void                 addFreePoint  (const Tempest::Vec3& pos, const Tempest::Vec3& dir, std::string_view name);
-    void                 addSound      (const ZenLoad::zCVobData& vob);
+    void                 addSound      (const phoenix::vob& vob);
 
     void                 invalidateVobIndex();
 
   private:
-    const Daedalus::GEngineClasses::C_Focus& searchPolicy(const Npc& pl, TargetCollect& coll, WorldObjects::SearchFlg& opt) const;
+    const phoenix::c_focus&     searchPolicy(const Npc& pl, TargetCollect& coll, WorldObjects::SearchFlg& opt) const;
     std::string                           wname;
     GameSession&                          game;
 
     std::unique_ptr<WayMatrix>            wmatrix;
-    ZenLoad::zCBspTreeData                bsp;
-    std::vector<BspSector>                bspSectors;
+
+    struct BspSector final {
+      int32_t guild=GIL_NONE;
+      };
+
+    struct {
+      std::vector<phoenix::bsp_node>        nodes;
+      std::vector<phoenix::bsp_sector>      sectors;
+      std::vector<std::uint64_t>            leaf_node_indices;
+      std::vector<BspSector>                sectorsData;
+      } bsp;
 
     Npc*                                  npcPlayer=nullptr;
 
@@ -198,7 +200,7 @@ class World final {
     WorldObjects                          wobj;
     std::unique_ptr<Npc>                  lvlInspector;
 
-    auto         roomAt(const ZenLoad::zCBspNode &node) -> const std::string &;
+    auto         roomAt(const phoenix::bsp_node &node) -> std::string_view;
     auto         portalAt(std::string_view tag) -> BspSector*;
 
     void         initScripts(bool firstTime);

@@ -2,39 +2,43 @@
 
 #include <Tempest/SoundEffect>
 
+#include "camera.h"
 #include "game/definitions/musicdefinitions.h"
 #include "game/gamesession.h"
+#include "world/triggers/abstracttrigger.h"
 #include "world/objects/npc.h"
 #include "world/objects/sound.h"
 #include "sound/soundfx.h"
+#include "utils/string_frm.h"
 #include "world.h"
 #include "gamemusic.h"
 #include "gothic.h"
 #include "resources.h"
 
-const float WorldSound::maxDist   = 3500; // 35 meters
-const float WorldSound::talkRange = 800;
+const float WorldSound::maxDist   = 7000; // 70 meters
+const float WorldSound::talkRange = 2000;
 
 struct WorldSound::WSound final {
   Sound          current;
   const SoundFx* eff0 = nullptr;
   const SoundFx* eff1 = nullptr;
 
+  std::string    vobName;
   Tempest::Vec3  pos;
-  float          sndRadius = 25;
+  float          sndRadius      = 2500;
 
-  bool           loop          =false;
-  bool           active        =false;
-  uint64_t       delay         =0;
-  uint64_t       delayVar      =0;
-  uint64_t       restartTimeout=0;
+  bool           loop           = false;
+  bool           active         = false;
+  uint64_t       delay          = 0;
+  uint64_t       delayVar       = 0;
+  uint64_t       restartTimeout = 0;
 
   gtime          sndStart;
   gtime          sndEnd;
   };
 
 struct WorldSound::Zone final {
-  ZMath::float3 bbox[2]={};
+  Tempest::Vec3 bbox[2]={};
   std::string   name;
   bool          checkPos(float x,float y,float z) const {
     return
@@ -63,43 +67,42 @@ WorldSound::WorldSound(GameSession &game, World& owner)
 WorldSound::~WorldSound() {
   }
 
-void WorldSound::setDefaultZone(const ZenLoad::zCVobData &vob) {
+void WorldSound::setDefaultZone(const phoenix::vobs::zone_music &vob) {
   def.reset(new Zone());
-  def->bbox[0] = vob.bbox[0];
-  def->bbox[1] = vob.bbox[1];
-  def->name    = vob.vobName;
+  def->bbox[0] = {vob.bbox.min.x, vob.bbox.min.y, vob.bbox.min.z};
+  def->bbox[1] = {vob.bbox.max.x, vob.bbox.max.y, vob.bbox.max.z};
+  def->name    = vob.vob_name;
   }
 
-void WorldSound::addZone(const ZenLoad::zCVobData &vob) {
+void WorldSound::addZone(const phoenix::vobs::zone_music &vob) {
   Zone z;
-  z.bbox[0] = vob.bbox[0];
-  z.bbox[1] = vob.bbox[1];
-  z.name    = vob.vobName;
+  z.bbox[0] = {vob.bbox.min.x, vob.bbox.min.y, vob.bbox.min.z};
+  z.bbox[1] = {vob.bbox.max.x, vob.bbox.max.y, vob.bbox.max.z};
+  z.name    = vob.vob_name;
 
   zones.emplace_back(std::move(z));
   }
 
-void WorldSound::addSound(const ZenLoad::zCVobData &vob) {
-  auto&  pr = vob.zCVobSound;
-
+void WorldSound::addSound(const phoenix::vobs::sound &vob) {
   WSound s;
-  s.loop      = pr.sndMode==ZenLoad::SoundMode::SM_LOOPING;
-  s.active    = pr.sndStartOn;
-  s.delay     = uint64_t(pr.sndRandDelay   *1000);
-  s.delayVar  = uint64_t(pr.sndRandDelayVar*1000);
-  s.eff0      = Gothic::inst().loadSoundFx(pr.sndName.c_str());
+  s.vobName   = vob.vob_name;
+  s.loop      = vob.mode==phoenix::sound_mode::loop;
+  s.active    = vob.initially_playing;
+  s.delay     = uint64_t(vob.random_delay * 1000);
+  s.delayVar  = uint64_t(vob.random_delay_var * 1000);
+  s.eff0      = Gothic::inst().loadSoundFx(vob.sound_name);
 
   s.pos       = {vob.position.x,vob.position.y,vob.position.z};
-  s.sndRadius = pr.sndRadius;
+  s.sndRadius = vob.radius;
 
-  if(vob.vobType==ZenLoad::zCVobData::VT_zCVobSoundDaytime) {
-    auto& prDay = vob.zCVobSoundDaytime;
-    float b     = prDay.sndStartTime;
-    float e     = prDay.sndEndTime;
+  if(vob.type==phoenix::vob_type::zCVobSoundDaytime) {
+    auto& prDay = (const phoenix::vobs::sound_daytime&) vob;
+    float b     = prDay.start_time;
+    float e     = prDay.end_time;
 
     s.sndStart = gtime(int(b),int(b*60)%60);
     s.sndEnd   = gtime(int(e),int(e*60)%60);
-    s.eff1     = Gothic::inst().loadSoundFx(prDay.sndName2.c_str());
+    s.eff1     = Gothic::inst().loadSoundFx(prDay.sound_name2);
     } else {
     s.sndStart = gtime(0,0);
     s.sndEnd   = gtime(24,0);
@@ -108,14 +111,14 @@ void WorldSound::addSound(const ZenLoad::zCVobData &vob) {
   worldEff.emplace_back(std::move(s));
   }
 
-Sound WorldSound::addDlgSound(std::string_view s, float x, float y, float z, float range, uint64_t& timeLen) {
-  if(!isInListenerRange({x,y,z},range))
+Sound WorldSound::addDlgSound(std::string_view s, const Tempest::Vec3& pos, float range, uint64_t& timeLen) {
+  if(!isInListenerRange(pos,range))
     return Sound();
   auto snd = Resources::loadSoundBuffer(s);
   if(snd.isEmpty())
     return Sound();
 
-  auto ret = implAddSound(game.loadSound(snd), x,y,z,range,maxDist);
+  auto ret = implAddSound(game.loadSound(snd), pos,range);
   if(ret.isEmpty())
     return Sound();
 
@@ -126,34 +129,36 @@ Sound WorldSound::addDlgSound(std::string_view s, float x, float y, float z, flo
   return ret;
   }
 
-Sound WorldSound::implAddSound(const SoundFx& eff, float x, float y, float z, float rangeRef, float rangeMax) {
+Sound WorldSound::implAddSound(const SoundFx& eff, const Tempest::Vec3& pos, float rangeMax) {
   bool loop = false;
-  auto ret = implAddSound(game.loadSound(eff,loop), x,y,z,rangeRef,rangeMax);
+  auto ret = implAddSound(game.loadSound(eff,loop), pos,rangeMax);
   ret.setLooping(loop);
   return ret;
   }
 
-Sound WorldSound::implAddSound(Tempest::SoundEffect&& eff, float x, float y, float z, float rangeRef, float rangeMax) {
+Sound WorldSound::implAddSound(Tempest::SoundEffect&& eff, const Tempest::Vec3& pos, float rangeMax) {
   if(eff.isEmpty())
     return Sound();
   auto ex = std::make_shared<Effect>();
-  eff.setPosition(x,y,z);
+  eff.setPosition(pos);
   eff.setMaxDistance(rangeMax);
-  eff.setRefDistance(rangeRef);
 
-  ex->eff = std::move(eff);
-  ex->pos = {x,y,z};
-  ex->vol = ex->eff.volume();
+  ex->eff     = std::move(eff);
+  ex->pos     = pos;
+  ex->vol     = ex->eff.volume();
+  ex->maxDist = rangeMax;
   ex->setOcclusion(0);
 
   return Sound(ex);
   }
 
-void WorldSound::tick(Npc &player) {
+void WorldSound::tick(Npc& player) {
   std::lock_guard<std::mutex> guard(sync);
-  plPos = player.position();
 
-  game.updateListenerPos(player);
+  auto cx = game.camera().listenerPosition();
+  plPos = cx.pos;
+
+  game.updateListenerPos(cx);
 
   for(auto& i:worldEff) {
     if(!i.active || !i.current.isFinished())
@@ -180,7 +185,7 @@ void WorldSound::tick(Npc &player) {
     if(snd==nullptr)
       continue;
 
-    i.current = implAddSound(*snd,i.pos.x,i.pos.y,i.pos.z,0,i.sndRadius);
+    i.current = implAddSound(*snd,i.pos,i.sndRadius);
     if(!i.current.isEmpty()) {
       effect.emplace_back(i.current.val);
       i.current.play();
@@ -189,6 +194,9 @@ void WorldSound::tick(Npc &player) {
     i.restartTimeout = owner.tickCount() + i.delay;
     if(i.delayVar>0)
       i.restartTimeout += uint64_t(std::rand())%i.delayVar;
+
+    if(!i.loop)
+      i.active = false;
     }
 
   tickSlot(effect);
@@ -196,6 +204,16 @@ void WorldSound::tick(Npc &player) {
   for(auto& i:freeSlot)
     tickSlot(*i.second);
   tickSoundZone(player);
+  }
+
+bool WorldSound::execTriggerEvent(const TriggerEvent& e) {
+  bool emitted=false;
+  for(auto& i:worldEff)
+    if(i.vobName==e.target) {
+      i.active = true;
+      emitted = true;
+      }
+  return emitted;
   }
 
 void WorldSound::tickSoundZone(Npc& player) {
@@ -280,10 +298,11 @@ void WorldSound::tickSlot(Effect& slot) {
     slot.setOcclusion(1.f);
     } else {
     auto  dyn  = owner.physic();
-    auto  head = plPos+Tempest::Vec3(0,180,0)/*head pos*/;
+    auto  head = plPos;
     auto  pos  = slot.pos;
     float occ  = 1;
-    if((pos-head).quadLength()<maxDist*maxDist)
+
+    if((pos-head).quadLength()<slot.maxDist*slot.maxDist)
       occ = dyn->soundOclusion(head, pos);
     slot.setOcclusion(std::max(0.f,1.f-occ));
     }
@@ -292,21 +311,19 @@ void WorldSound::tickSlot(Effect& slot) {
 void WorldSound::initSlot(WorldSound::Effect& slot) {
   auto  dyn = owner.physic();
   auto  pos = slot.pos;
-  float occ = dyn->soundOclusion(plPos+Tempest::Vec3(0,180,0)/*head pos*/, pos);
+  float occ = dyn->soundOclusion(plPos, pos);
   slot.setOcclusion(std::max(0.f,1.f-occ));
   }
 
 bool WorldSound::setMusic(std::string_view zone, GameMusic::Tags tags) {
-  bool        isDay = (tags&GameMusic::Ngt)==0;
-  const char* smode = "STD";
+  bool             isDay = (tags&GameMusic::Ngt)==0;
+  std::string_view smode = "STD";
   if(tags&GameMusic::Thr)
     smode = "THR";
   if(tags&GameMusic::Fgt)
     smode = "FGT";
 
-  char name[64]={};
-  std::snprintf(name,sizeof(name),"%.*s_%s_%s",int(zone.size()),zone.data(),(isDay ? "DAY" : "NGT"),smode);
-
+  string_frm name(zone,'_',(isDay ? "DAY" : "NGT"),'_',smode);
   if(auto* theme = Gothic::musicDef()[name]) {
     GameMusic::inst().setMusic(*theme,tags);
     return true;
@@ -329,9 +346,9 @@ bool WorldSound::canSeeSource(const Tempest::Vec3& p) const {
   return false;
   }
 
-void WorldSound::aiOutput(const Tempest::Vec3& pos,const std::string &outputname) {
+void WorldSound::aiOutput(const Tempest::Vec3& pos, std::string_view outputname) {
   if(isInListenerRange(pos,talkRange)){
     std::lock_guard<std::mutex> guard(sync);
-    Gothic::inst().emitGlobalSound(Resources::loadSoundBuffer(outputname+".wav"));
+    Gothic::inst().emitGlobalSound(Resources::loadSoundBuffer(string_frm(outputname,".wav")));
     }
   }

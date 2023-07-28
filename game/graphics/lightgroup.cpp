@@ -5,11 +5,9 @@
 
 #include "graphics/shaders.h"
 #include "graphics/sceneglobals.h"
+#include "utils/string_frm.h"
 #include "world/world.h"
-#include "utils/gthfont.h"
-#include "utils/workers.h"
 #include "utils/dbgpainter.h"
-#include "bounds.h"
 #include "gothic.h"
 
 using namespace Tempest;
@@ -51,22 +49,25 @@ LightGroup::Light::Light(LightGroup& owner)
   id = owner.alloc(true);
   }
 
-LightGroup::Light::Light(LightGroup& owner, const ZenLoad::zCVobData& vob)
+LightGroup::Light::Light(LightGroup& owner, const phoenix::vobs::light_preset& vob)
   :owner(&owner) {
   LightSource l;
-  l.setPosition(Vec3(vob.position.x,vob.position.y,vob.position.z));
+  l.setPosition(Vec3(0, 0, 0));
 
-  if(vob.zCVobLight.dynamic.rangeAniScale.size()>0) {
-    l.setRange(vob.zCVobLight.dynamic.rangeAniScale,vob.zCVobLight.range,vob.zCVobLight.dynamic.rangeAniFPS,vob.zCVobLight.dynamic.rangeAniSmooth);
+  if(!vob.range_animation_scale.empty()) {
+    l.setRange(vob.range_animation_scale,vob.range,vob.range_animation_fps,vob.range_animation_smooth);
     } else {
-    l.setRange(vob.zCVobLight.range);
+    l.setRange(vob.range);
     }
 
-  if(vob.zCVobLight.dynamic.colorAniList.size()>0) {
-    l.setColor(vob.zCVobLight.dynamic.colorAniList,vob.zCVobLight.dynamic.colorAniListFPS,vob.zCVobLight.dynamic.colorAniSmooth);
+  if(!vob.color_animation_list.empty()) {
+    l.setColor(vob.color_animation_list,vob.color_animation_fps,vob.color_animation_smooth);
     } else {
-    l.setColor(vob.zCVobLight.color);
+    l.setColor(Vec3(vob.color.r / 255.f, vob.color.g / 255.f, vob.color.b / 255.f));
     }
+
+  // if(vob.light_type==phoenix::light_mode::spot)
+  //   Log::d("");
 
   std::lock_guard<std::recursive_mutex> guard(owner.sync);
   id = owner.alloc(l.isDynamic());
@@ -79,15 +80,25 @@ LightGroup::Light::Light(LightGroup& owner, const ZenLoad::zCVobData& vob)
   data = std::move(l);
   }
 
+LightGroup::Light::Light(LightGroup& owner, const phoenix::vobs::light& vob)
+      :Light(owner, static_cast<const phoenix::vobs::light_preset&>(vob)) {
+  setPosition(Vec3(vob.position.x,vob.position.y,vob.position.z));
+  }
+
 LightGroup::Light::Light(World& owner, std::string_view preset)
   :Light(owner,owner.view()->sGlobal.lights.findPreset(preset)){
   setTimeOffset(owner.tickCount());
   }
 
-LightGroup::Light::Light(World& owner, const ZenLoad::zCVobData& vob)
+LightGroup::Light::Light(World& owner, const phoenix::vobs::light_preset& vob)
   :Light(owner.view()->sGlobal.lights,vob) {
   setTimeOffset(owner.tickCount());
   }
+
+LightGroup::Light::Light(World& owner, const phoenix::vobs::light& vob)
+  :Light(owner.view()->sGlobal.lights,vob){
+  setTimeOffset(owner.tickCount());
+}
 
 LightGroup::Light::Light(World& owner)
   :Light(owner.view()->sGlobal.lights) {
@@ -167,7 +178,7 @@ LightGroup::LightGroup(const SceneGlobals& scene)
   :scene(scene) {
   auto& device = Resources::device();
   for(auto& u:uboBuf)
-    u = device.ubo<Ubo>(nullptr,1);
+    u = device.ubo(Ubo());
 
   LightBucket* bucket[2] = {&bucketSt, &bucketDyn};
   for(auto b:bucket) {
@@ -201,18 +212,24 @@ LightGroup::LightGroup(const SceneGlobals& scene)
   vbo = device.vbo(v,8);
 
   try {
-    auto  filename = Gothic::inst().nestedPath({u"_work",u"Data",u"Presets",u"LIGHTPRESETS.ZEN"},Dir::FT_File);
-    RFile fin(filename);
-    std::vector<uint8_t> bin(fin.size());
-    fin.read(bin.data(),bin.size());
+    auto filename = Gothic::inst().nestedPath({u"_work", u"Data", u"Presets", u"LIGHTPRESETS.ZEN"}, Dir::FT_File);
+    auto buf = phoenix::buffer::mmap(filename);
+    auto zen = phoenix::archive_reader::open(buf);
 
-    ZenLoad::ZenParser parser(bin.data(),bin.size());
-    parser.readHeader();
+    phoenix::archive_object obj {};
+    auto count = zen->read_int();
+    for(int i = 0; i < count; ++i) {
+      zen->read_object_begin(obj);
 
-    auto fver = ZenLoad::ZenParser::FileVersion::Gothic1;
-    if(Gothic::inst().version().game==2)
-      fver = ZenLoad::ZenParser::FileVersion::Gothic2;
-    parser.readPresets(presets,fver);
+      presets.push_back(phoenix::vobs::light_preset::parse(
+          *zen,
+          Gothic::inst().version().game == 1 ? phoenix::game_version::gothic_1
+                                             : phoenix::game_version::gothic_2));
+
+      if(!zen->read_object_end()) {
+        zen->skip_object(true);
+        }
+      }
     }
   catch(...) {
     Log::e("unable to load Zen-file: \"LIGHTPRESETS.ZEN\"");
@@ -284,9 +301,8 @@ void LightGroup::dbgLights(DbgPainter& p) const {
       }
     }
 
-  char  buf[250]={};
-  std::snprintf(buf,sizeof(buf),"light count = %d",cnt);
-  p.drawText(10,50,buf);
+  string_frm name("light count = ",cnt);
+  p.drawText(10,50,name);
   }
 
 void LightGroup::free(size_t id) {
@@ -321,14 +337,14 @@ RenderPipeline& LightGroup::shader() const {
   return Shaders::inst().lights;
   }
 
-const ZenLoad::zCVobData& LightGroup::findPreset(std::string_view preset) const {
+const phoenix::vobs::light_preset& LightGroup::findPreset(std::string_view preset) const {
   for(auto& i:presets) {
-    if(i.zCVobLight.lightPresetInUse!=preset)
+    if(i.preset!=preset)
       continue;
     return i;
     }
-  Log::e("unknown light preset: \"",std::string(preset),"\"");
-  static ZenLoad::zCVobData zero;
+  Log::e("unknown light preset: \"",preset,"\"");
+  static phoenix::vobs::light_preset zero {};
   return zero;
   }
 
@@ -366,12 +382,12 @@ void LightGroup::preFrameUpdate(uint8_t fId) {
   fr.make(scene.viewProject(),1,1);
 
   Ubo ubo;
-  ubo.mvp    = scene.viewProject();
-  ubo.mvpInv = ubo.mvp;
-  ubo.mvpInv.inverse();
+  ubo.mvp       = scene.viewProject();
+  ubo.mvpLwcInv = scene.viewProjectLwcInv();
+  ubo.origin    = scene.originLwc;
   std::memcpy(ubo.fr,fr.f,sizeof(ubo.fr));
 
-  uboBuf[fId].update(&ubo,0,1);
+  uboBuf[fId].update(&ubo);
   }
 
 void LightGroup::draw(Encoder<CommandBuffer>& cmd, uint8_t fId) {
@@ -399,16 +415,16 @@ void LightGroup::setupUbo() {
       auto& u = b->ubo[i];
       u.set(0,*scene.gbufDiffuse,Sampler::nearest());
       u.set(1,*scene.gbufNormals,Sampler::nearest());
-      u.set(2,*scene.gbufDepth,  Sampler::nearest());
+      u.set(2,*scene.zbuffer,    Sampler::nearest());
       u.set(3,uboBuf[i]);
       if(Gothic::inst().doRayQuery() && scene.tlas!=nullptr) {
         if(Resources::device().properties().bindless.nonUniformIndexing) {
-          u.set(6,scene.bindless.tex);
-          u.set(7,scene.bindless.vbo);
-          u.set(8,scene.bindless.ibo);
-          u.set(9,scene.bindless.iboOffset);
+          u.set(6, Sampler::bilinear());
+          u.set(7, scene.bindless.tex);
+          u.set(8, scene.bindless.vbo);
+          u.set(9, scene.bindless.ibo);
+          u.set(10,scene.bindless.iboOffset);
           }
-        // Workaround for https://github.com/KhronosGroup/Vulkan-ValidationLayers/pull/4219
         u.set(5,*scene.tlas);
         }
       }

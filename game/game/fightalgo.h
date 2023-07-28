@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include <daedalus/DaedalusStdlib.h>
+#include <phoenix/ext/daedalus_classes.hh>
 
 class Npc;
 class GameScript;
@@ -20,15 +20,17 @@ class FightAlgo final {
       MV_MOVEG    = 1,
       MV_MOVEA    = 2,
       MV_JUMPBACK = 3,
-      MV_ATACK    = 4,
-      MV_ATACKL   = 5,
-      MV_ATACKR   = 6,
+      MV_ATTACK   = 4,
+      MV_ATTACKL  = 5,
+      MV_ATTACKR  = 6,
       MV_STRAFEL  = 7,
       MV_STRAFER  = 8,
       MV_BLOCK    = 9,
       MV_WAIT     = 10,
       MV_WAITLONG = 11,
       MV_TURN2HIT = 12,
+      MV_TURNA    = 13,
+      MV_TURNG    = 14,
 
       MV_MAX      = 6
       };
@@ -42,21 +44,21 @@ class FightAlgo final {
     bool   fetchInstructions(Npc &npc, Npc &tg, GameScript& owner);
 
     float  baseDistance          (const Npc &npc, const Npc &tg,  GameScript &owner) const;
-    float  prefferedAtackDistance(const Npc &npc, const Npc &tg, GameScript &owner) const;
+    float  prefferedAttackDistance(const Npc &npc, const Npc &tg, GameScript &owner) const;
     float  prefferedGDistance    (const Npc &npc, const Npc &tg, GameScript &owner) const;
 
-    bool   isInAtackRange        (const Npc &npc, const Npc &tg, GameScript &owner) const;
+    bool   isInAttackRange        (const Npc &npc, const Npc &tg, GameScript &owner) const;
     bool   isInWRange            (const Npc &npc, const Npc &tg, GameScript &owner) const;
     bool   isInGRange            (const Npc &npc, const Npc &tg, GameScript &owner) const;
     bool   isInFocusAngle        (const Npc &npc, const Npc &tg) const;
 
   private:
     void   fillQueue(Npc &npc, Npc &tg, GameScript& owner);
-    bool   fillQueue(GameScript& owner,const Daedalus::GEngineClasses::C_FightAI& src);
+    bool   fillQueue(GameScript& owner,const phoenix::c_fight_ai& src);
 
     static float  weaponRange(GameScript &owner,const Npc &npc);
 
-    Daedalus::GEngineClasses::Move queueId=Daedalus::GEngineClasses::Move(0);
-    Action                         tr   [MV_MAX]={};
-    bool                           hitFlg=false;
+    phoenix::c_fight_ai_move           queueId=phoenix::c_fight_ai_move::nop;
+    Action                             tr   [MV_MAX]={};
+    bool                               hitFlg=false;
   };

@@ -38,8 +38,15 @@ if(WIN32)
   if(MSVC)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup" )
   else()
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -mwindows")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -mwindows -lstdc++fs")
   endif()
+endif()
+
+if(APPLE)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET 12.0)
+  enable_language(OBJCXX)
+  target_link_libraries(${PROJECT_NAME} "-framework AppKit")
+  file(GLOB_RECURSE ObjCSOURCES "game/*.mm")
 endif()
 
 ## OpenGothic
@@ -49,7 +56,7 @@ file(GLOB_RECURSE OPENGOTHIC_SOURCES
     "game/*.h"
     "game/*.cpp")
 
-target_sources(${PROJECT_NAME} PRIVATE ${OPENGOTHIC_SOURCES} icon.rc)
+target_sources(${PROJECT_NAME} PRIVATE ${OPENGOTHIC_SOURCES} ${ObjCSOURCES} icon.rc)
 
 # shaders
 add_subdirectory(shader)
@@ -72,11 +79,13 @@ elseif(UNIX)
   target_link_libraries(${PROJECT_NAME} -lpthread -ldl)
 endif()
 
-# ZenLib
-set(BUILD_SQUISH_WITH_SSE2 OFF CACHE INTERNAL "")
-add_subdirectory(lib/ZenLib)
-include_directories(lib/ZenLib)
-target_link_libraries(${PROJECT_NAME} zenload daedalus)
+# phoenix
+set(BUILD_SQUISH_WITH_SSE2     OFF CACHE INTERNAL "")
+set(PHOENIX_DISABLE_SANITIZERS ON  CACHE INTERNAL "")
+set(PHOENIX_LOG_LEVEL "3")
+
+add_subdirectory(lib/phoenix)
+target_link_libraries(${PROJECT_NAME} phoenix)
 
 # TinySoundFont
 add_definitions(-DTSF_NO_STDIO)
@@ -131,6 +140,14 @@ elseif(UNIX)
         COMMAND ${CMAKE_COMMAND} -E copy
         ${CMAKE_SOURCE_DIR}/scripts/Gothic2Notr.sh
         ${CMAKE_CURRENT_BINARY_DIR}/opengothic/Gothic2Notr.sh)
+endif()
+
+# in debug mode, enable sanitizers
+if(${CMAKE_BUILD_TYPE} MATCHES "Debug")
+  add_compile_options(-fsanitize=address)
+  add_compile_options(-fsanitize=leak)
+  add_link_options   (-fsanitize=address)
+  add_link_options   (-fsanitize=leak)
 endif()
 
 # installation

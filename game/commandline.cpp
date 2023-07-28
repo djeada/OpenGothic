@@ -3,11 +3,11 @@
 #include <Tempest/Log>
 #include <Tempest/TextCodec>
 #include <cstring>
-
-#include "gothic.h"
+#include <filesystem>
 
 #include "utils/installdetect.h"
 #include "utils/fileutil.h"
+#include "utils/string_frm.h"
 
 using namespace Tempest;
 using namespace FileUtil;
@@ -32,13 +32,17 @@ CommandLine::CommandLine(int argc, const char** argv) {
       if(i<argc)
         gpath.assign(argv[i],argv[i]+std::strlen(argv[i]));
       }
+    else if(arg=="-devmode") {
+      // http://www.gothic-library.ru/publ/marvin/1-1-0-547
+      devmode = true;
+      }
     else if(arg=="-save") {
       ++i;
       if(i<argc){
         if(std::strcmp(argv[i],"q")==0) {
           saveDef = "save_slot_0.sav";
           } else {
-          saveDef = std::string("save_slot_")+argv[i]+".sav";
+          saveDef = string_frm("save_slot_",argv[i],".sav");
           }
         }
       }
@@ -52,9 +56,6 @@ CommandLine::CommandLine(int argc, const char** argv) {
       }
     else if(arg=="-nomenu") {
       noMenu   = true;
-      }
-    else if(arg=="-nofrate") {
-      noFrate  = true;
       }
     else if(arg=="-g1") {
       forceG1 = true;
@@ -83,6 +84,11 @@ CommandLine::CommandLine(int argc, const char** argv) {
   if(gpath.empty()) {
     InstallDetect inst;
     gpath = inst.detectG2();
+#ifdef __OSX__
+    if(!gpath.empty() && gpath==inst.applicationSupportDirectory()) {
+      std::filesystem::current_path(gpath);
+      }
+#endif
     }
 
   for(auto& i:gpath)

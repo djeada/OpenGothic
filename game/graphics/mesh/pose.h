@@ -20,7 +20,7 @@ class Pose final {
 
     enum Flags {
       NoFlags       = 0,
-      NoTranslation = 1, // usefull for mobsi
+      NoTranslation = 1, // useful for mobsi
       };
 
     enum StartHint : uint8_t {
@@ -37,6 +37,7 @@ class Pose final {
     void               setFlags(Flags f);
     BodyState          bodyState() const;
     bool               hasState(BodyState s) const;
+    bool               hasStateFlag(BodyState f) const;
     void               setSkeleton(const Skeleton *sk);
     bool               startAnim(const AnimationSolver &solver, const Animation::Sequence* sq,
                                  uint8_t comb, BodyState bs,
@@ -63,17 +64,20 @@ class Pose final {
     bool               isFlyAnim() const;
     bool               isStanding() const;
     bool               isPrehit(uint64_t now) const;
-    bool               isAtackAnim() const;
+    bool               isAttackAnim() const;
     bool               isIdle() const;
     bool               isInAnim(std::string_view           sq) const;
     bool               isInAnim(const Animation::Sequence* sq) const;
     bool               hasAnim() const;
     uint64_t           animationTotalTime() const;
+    uint64_t           atkTotalTime() const;
 
-    auto               continueCombo(const AnimationSolver &solver,const Animation::Sequence *sq,uint64_t tickCount) -> const Animation::Sequence*;
+    auto               continueCombo(const AnimationSolver &solver, const Animation::Sequence *sq, BodyState bs, uint64_t tickCount) -> const Animation::Sequence*;
     uint16_t           comboLength() const;
 
     float              translateY() const { return trY; }
+    auto               rootNode() const -> const Tempest::Matrix4x4;
+    auto               rootBone() const -> const Tempest::Matrix4x4;
     auto               bone(size_t id) const -> const Tempest::Matrix4x4&;
     size_t             boneCount() const;
     size_t             findNode(std::string_view b) const;
@@ -81,23 +85,24 @@ class Pose final {
     void               setHeadRotation(float dx, float dz);
     Tempest::Vec2      headRotation() const;
     void               setAnimRotate(const AnimationSolver &solver, Npc &npc, WeaponState fightMode, int dir);
-    bool               setAnimItem(const AnimationSolver &solver, Npc &npc, std::string_view scheme, int state);
+    auto               setAnimItem(const AnimationSolver &solver, Npc &npc, std::string_view scheme, int state) -> const Animation::Sequence*;
     bool               stopItemStateAnim(const AnimationSolver &solver, uint64_t tickCount);
 
     const Tempest::Matrix4x4* transform() const;
 
   private:
     enum SampleStatus : uint8_t {
-      S_None,
-      S_Old,
-      S_Valid,
+      S_None  = 0,
+      S_Old   = 1,
+      S_Valid = 2,
       };
 
     struct Layer final {
-      const Animation::Sequence* seq   = nullptr;
-      uint64_t                   sAnim = 0;
-      uint8_t                    comb  = 0;
-      BodyState                  bs    = BS_NONE;
+      const Animation::Sequence* seq      = nullptr;
+      uint64_t                   sAnim    = 0;
+      uint8_t                    comb     = 0;
+      uint64_t                   blendOut = 0;
+      BodyState                  bs       = BS_NONE;
       };
 
     struct ComboState {
@@ -144,8 +149,8 @@ class Pose final {
 
     size_t                          numBones = 0;
     SampleStatus                    hasSamples[Resources::MAX_NUM_SKELETAL_NODES] = {};
-    ZenLoad::zCModelAniSample       base      [Resources::MAX_NUM_SKELETAL_NODES] = {};
-    ZenLoad::zCModelAniSample       prev      [Resources::MAX_NUM_SKELETAL_NODES] = {};
+    phoenix::animation_sample       base      [Resources::MAX_NUM_SKELETAL_NODES] = {};
+    phoenix::animation_sample       prev      [Resources::MAX_NUM_SKELETAL_NODES] = {};
     Tempest::Matrix4x4              tr        [Resources::MAX_NUM_SKELETAL_NODES] = {};
     Tempest::Matrix4x4              pos;
   };

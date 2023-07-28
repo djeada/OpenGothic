@@ -1,5 +1,6 @@
 #version 460
 #extension GL_ARB_separate_shader_objects : enable
+#extension GL_GOOGLE_include_directive    : enable
 
 #if defined(RAY_QUERY)
 #extension GL_EXT_ray_query : enable
@@ -7,7 +8,12 @@
 
 #if defined(RAY_QUERY_AT)
 #extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_ray_flags_primitive_culling : enable
 #endif
+
+#include "lighting/tonemapping.glsl"
+#include "common.glsl"
+
 layout(early_fragment_tests) in;
 
 layout(location = 0) out vec4 outColor;
@@ -18,8 +24,9 @@ layout(binding  = 2) uniform sampler2D depth;
 
 layout(binding  = 3, std140) uniform Ubo {
   mat4  mvp;
-  mat4  mvpInv;
+  mat4  mvpLwcInv;
   vec4  fr[6];
+  vec3  origin; //lwc
   } ubo;
 
 #if defined(RAY_QUERY)
@@ -27,15 +34,15 @@ layout(binding  = 5) uniform accelerationStructureEXT topLevelAS;
 #endif
 
 #if defined(RAY_QUERY_AT)
-layout(binding  = 6) uniform sampler2D textures[];
-layout(binding  = 7, std430) readonly buffer Vbo { float vert[];   } vbo[];
-layout(binding  = 8, std430) readonly buffer Ibo { uint  index[];  } ibo[];
-layout(binding  = 9, std430) readonly buffer Off { uint  offset[]; } iboOff;
+layout(binding  = 6) uniform sampler   smp;
+layout(binding  = 7) uniform texture2D textures[];
+layout(binding  = 8,  std430) readonly buffer Vbo { float vert[];   } vbo[];
+layout(binding  = 9,  std430) readonly buffer Ibo { uint  index[];  } ibo[];
+layout(binding  = 10, std430) readonly buffer Off { uint  offset[]; } iboOff;
 #endif
 
-layout(location = 0) in vec4 scrPosition;
-layout(location = 1) in vec4 cenPosition;
-layout(location = 2) in vec3 color;
+layout(location = 0) in vec4 cenPosition;
+layout(location = 1) in vec3 color;
 
 #if defined(RAY_QUERY_AT)
 vec2 pullTexcoord(uint id, uint vboOffset) {
@@ -72,7 +79,7 @@ bool alphaTest(in rayQueryEXT rayQuery, uint id) {
   b.x = (1-b.y-b.z);
   vec2 uv = (b.x*uv0 + b.y*uv1 + b.z*uv2);
 
-  vec4 d = textureLod(textures[nonuniformEXT(id)],uv,0);
+  vec4 d = textureLod(sampler2D(textures[nonuniformEXT(id)], smp),uv,0);
   return (d.a>0.5);
   }
 #endif
@@ -85,10 +92,9 @@ bool isShadow(vec3 rayOrigin, vec3 direction) {
   if(rayDistance<=tMin)
     return false;
 
-  //uint flags = gl_RayFlagsCullBackFacingTrianglesEXT | gl_RayFlagsTerminateOnFirstHitEXT;
   uint flags = gl_RayFlagsTerminateOnFirstHitEXT;
-#if defined(RAY_QUERY_AT)
-  flags |= gl_RayFlagsNoOpaqueEXT;
+#if !defined(RAY_QUERY_AT)
+  flags |= gl_RayFlagsCullNoOpaqueEXT;
 #endif
 
   rayQueryEXT rayQuery;
@@ -116,36 +122,49 @@ bool isShadow(vec3 rayOrigin, vec3 direction) {
   }
 
 void main(void) {
-  vec2 scr = scrPosition.xy/scrPosition.w;
-  vec2 uv  = scr*0.5+vec2(0.5);
-  vec4 z   = textureLod(depth,  uv,0);
+  vec2  scr = (gl_FragCoord.xy/vec2(textureSize(depth,0)))*2.0-1.0;
+  float z   = texelFetch(depth, ivec2(gl_FragCoord.xy), 0).x; //lwc?
 
-  vec4 pos = ubo.mvpInv*vec4(scr.x,scr.y,z.x,1.0);
+  vec4 pos = ubo.mvpLwcInv*vec4(scr.x,scr.y,z,1.0);
   pos.xyz/=pos.w;
-  vec3  ldir  = (pos.xyz-cenPosition.xyz);
-  float qDist = dot(ldir,ldir)/(cenPosition.w*cenPosition.w);
+  pos.xyz += ubo.origin;
 
-  if(qDist>1.0)
+  vec3 ldir = (pos.xyz-cenPosition.xyz);
+  //float qDist = dot(ldir,ldir)/(cenPosition.w*cenPosition.w);
+
+  const float distanceSquare = dot(ldir,ldir);
+  const float factor         = distanceSquare / (cenPosition.w*cenPosition.w);
+  const float smoothFactor   = max(1.0 - factor * factor, 0.0);
+
+  if(factor>1.0)
     discard;
 
-  vec4 d   = textureLod(diffuse,uv,0);
-  vec4 n   = textureLod(normals,uv,0);
+  vec3  n       = texelFetch(normals, ivec2(gl_FragCoord.xy), 0).xyz;
+  vec3  normal  = normalize(n*2.0-vec3(1.0));
 
-  vec3  normal  = normalize(n.xyz*2.0-vec3(1.0));
+  //float light   = (1.0-qDist)*lambert;
+
   float lambert = max(0.0,-dot(normalize(ldir),normal));
+  float light   = (lambert/max(factor, 0.05)) * (smoothFactor*smoothFactor);
+  if(light<0)
+    discard;
 
-  float light = (1.0-qDist)*lambert;
-  //if(light<=0.001)
-  //  discard;
-
-  pos.xyz  = pos.xyz+5.0*normal; //bias
-  ldir = (pos.xyz-cenPosition.xyz);
-  if(light>0 && isShadow(cenPosition.xyz,ldir))
+  pos.xyz = pos.xyz+5.0*normal; //bias
+  ldir    = (pos.xyz-cenPosition.xyz);
+  if(isShadow(cenPosition.xyz,ldir))
     discard;
 
   //outColor     = vec4(0.5,0.5,0.5,1);
   //outColor     = vec4(light,light,light,0.0);
-  outColor     = vec4(d.rgb*color*vec3(light),0.0);
+  //outColor     = vec4(d.rgb*color*vec3(light),0.0);
+
+  const vec3 d      = texelFetch(diffuse, ivec2(gl_FragCoord.xy), 0).xyz;
+  const vec3 linear = textureLinear(d.rgb) * PhotoLumInv;
+
+  vec3 color = linear*color*light;
+  //color *= scene.exposure;
+
+  outColor = vec4(color,0.0);
   //if(dbg!=vec4(0))
   //  outColor = dbg;
   }

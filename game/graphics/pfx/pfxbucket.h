@@ -41,22 +41,27 @@ class PfxBucket {
       std::unique_ptr<PfxEmitter> next;
       };
 
-    ObjectsBucket::Item         item;
-    Tempest::VertexBuffer<Vertex> vboGpu[Resources::MaxFramesInFlight];
-    std::vector<Vertex>         vboCpu;
+    struct PfxState {
+      Tempest::Vec3 pos;
+      uint32_t      color  = 0;
+      Tempest::Vec3 size;
+      uint32_t      bits0  = 0;
+      Tempest::Vec3 dir;
+      uint32_t      colorB = 0;
+      };
 
     const ParticleFx&           decl;
     PfxObjects&                 parent;
-    size_t                      blockSize = 0;
 
     bool                        isEmpty() const;
+    void                        preFrameUpdate(uint8_t fId);
 
     size_t                      allocEmitter();
     void                        freeEmitter(size_t& id);
 
     ImplEmitter&                get(size_t id) { return impl[id]; }
     void                        tick(uint64_t dt, const Tempest::Vec3& viewPos);
-    void                        buildVbo(const PfxObjects::VboContext& ctx);
+    void                        buildSsbo();
 
   private:
     struct Block final {
@@ -69,9 +74,17 @@ class PfxBucket {
       Tempest::Vec3 pos       = {};
       };
 
+    struct Trail final {
+      Tempest::Vec3 pos;
+      uint64_t      time = 0;
+      };
+
     struct ParState final {
-      uint16_t      life=0,maxLife=1;
+      uint16_t      life=0, maxLife=1;
       Tempest::Vec3 pos, dir;
+
+      std::vector<Trail> trail;
+
       float         lifeTime() const;
       };
 
@@ -87,22 +100,37 @@ class PfxBucket {
     Block&                      getBlock(ImplEmitter& emitter);
     Block&                      getBlock(PfxEmitter&  emitter);
 
-    void                        init    (Block& block, ImplEmitter& emitter, size_t particle);
-    void                        finalize(size_t particle);
-    void                        tick    (Block& sys, ImplEmitter& emitter, size_t particle, uint64_t dt);
+    void                        init     (Block& block, ImplEmitter& emitter, size_t particle);
+    void                        finalize (size_t particle);
+    void                        tick     (Block& sys, ImplEmitter& emitter, size_t particle, uint64_t dt);
+    void                        tickTrail(ParState& ps, ImplEmitter& emitter, uint64_t dt);
 
     void                        implTickCommon(uint64_t dt, const Tempest::Vec3& viewPos);
     void                        implTickDecals(uint64_t dt, const Tempest::Vec3& viewPos);
 
-    void                        buildBilboard(Vertex v[], const Block& p, const ParState& ps, const uint32_t color,
-                                              const Tempest::Vec3& l, const Tempest::Vec3& t, const Tempest::Vec3& d,
+    void                        buildSsboTrails();
+    void                        buildBilboard(PfxState& v, const Block& p, const ParState& ps, const uint32_t color,
                                               float szX, float szY, float szZ);
+    void                        buildTrailSegment(PfxState& v, const Trail& a, const Trail& b, float maxT);
+    uint32_t                    mkTrailColor(float clA) const;
 
     VisualObjects&              visual;
+
+    ObjectsBucket::Item         item;
+    Tempest::StorageBuffer      pfxGpu[Resources::MaxFramesInFlight];
+    std::vector<PfxState>       pfxCpu;
+
+    ObjectsBucket::Item         itemTrl;
+    Tempest::StorageBuffer      trlGpu[Resources::MaxFramesInFlight];
+    std::vector<PfxState>       trlCpu;
+
+    uint64_t                    maxTrlTime = 0;
+    size_t                      blockSize = 0;
+
     std::vector<ParState>       particles;
     std::vector<ImplEmitter>    impl;
     std::vector<Block>          block;
-    const size_t                vertexCount;
+    bool                        forceUpdate[Resources::MaxFramesInFlight] = {};
 
     static std::mt19937         rndEngine;
 

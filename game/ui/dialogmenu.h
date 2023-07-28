@@ -32,6 +32,7 @@ class DialogMenu : public Tempest::Widget {
 
     void aiIsClose(bool& ret);
     bool isActive() const;
+    bool hasContent() const;
 
     void print      (std::string_view msg);
     void printScreen(std::string_view msg, int x, int y, int time, const GthFont &font);
@@ -41,14 +42,14 @@ class DialogMenu : public Tempest::Widget {
 
   protected:
     void paintEvent (Tempest::PaintEvent& e) override;
-    void paintChoise(Tempest::PaintEvent& e);
+    void paintChoice(Tempest::PaintEvent& e);
 
     void mouseDownEvent (Tempest::MouseEvent& event) override;
     void mouseWheelEvent(Tempest::MouseEvent& event) override;
 
     void onSelect();
     void setupSettings();
-    bool isChoiseMenuActive() const;
+    bool isChoiceMenuActive() const;
 
   private:
     const Tempest::Texture2d* tex    =nullptr;
@@ -57,10 +58,10 @@ class DialogMenu : public Tempest::Widget {
     struct Pipe : AiOuputPipe {
       Pipe(DialogMenu& owner):owner(owner){}
 
-      bool output   (Npc& npc, const Daedalus::ZString& text) override;
-      bool outputSvm(Npc& npc, const Daedalus::ZString& text) override;
-      bool outputOv (Npc& npc, const Daedalus::ZString& text) override;
-      bool printScr (Npc& npc, int time, const Daedalus::ZString& msg, int x, int y, const Daedalus::ZString& font) override;
+      bool output   (Npc& npc, std::string_view text) override;
+      bool outputSvm(Npc& npc, std::string_view text) override;
+      bool outputOv (Npc& npc, std::string_view text) override;
+      bool printScr (Npc& npc, int time, std::string_view msg, int x, int y, std::string_view font) override;
 
       bool close() override;
       bool isFinished() override;
@@ -99,18 +100,18 @@ class DialogMenu : public Tempest::Widget {
       };
 
     bool onStart(Npc& pl,Npc& other);
-    void onEntry(const GameScript::DlgChoise& e);
+    void onEntry(const GameScript::DlgChoice& e);
     void onDoneText();
     void close();
-    bool aiOutput  (Npc& npc, const Daedalus::ZString& msg);
-    bool aiPrintScr(Npc& npc, int time, const Daedalus::ZString& msg, int x, int y, const Daedalus::ZString& font);
+    bool aiOutput  (Npc& npc, std::string_view msg);
+    bool aiPrintScr(Npc& npc, int time, std::string_view msg, int x, int y, std::string_view font);
     bool aiClose();
 
     bool haveToWaitOutput() const;
     bool hasPrintMsg() const;
 
-    void drawTextMultiline(Tempest::Painter& p, int x, int y, int w, int h, const std::string& txt, bool isPl);
-    Tempest::Size processTextMultiline(Tempest::Painter* p, int x, int y, int w, int h, const std::string& txt, bool isPl);
+    void drawTextMultiline(Tempest::Painter& p, int x, int y, int w, int h, std::string_view txt, bool isPl);
+    Tempest::Size processTextMultiline(Tempest::Painter* p, int x, int y, int w, int h, std::string_view txt, bool isPl);
 
     void startTrade();
     void skipPhrase();
@@ -120,8 +121,8 @@ class DialogMenu : public Tempest::Widget {
 
     Tempest::SoundDevice                soundDevice;
 
-    std::vector<GameScript::DlgChoise>  choise;
-    GameScript::DlgChoise               selected;
+    std::vector<GameScript::DlgChoice>  choice;
+    GameScript::DlgChoice               selected;
     Npc*                                pl   =nullptr;
     Npc*                                other=nullptr;
     size_t                              dlgSel=0;
@@ -140,5 +141,5 @@ class DialogMenu : public Tempest::Widget {
     uint64_t                            remPrint=0;
 
     bool                                dlgAnimation   = true;
-    uint64_t                            choiseAnimTime = 0;
+    uint64_t                            choiceAnimTime = 0;
   };

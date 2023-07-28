@@ -9,7 +9,6 @@
 
 #include "world/objects/pfxemitter.h"
 #include "graphics/visualobjects.h"
-#include "resources.h"
 
 class SceneGlobals;
 class ParticleFx;
@@ -23,17 +22,6 @@ class PfxObjects final {
 
     static constexpr const float viewRage = 4000.f;
 
-    struct VboContext {
-      Tempest::Vec3 left = {};
-      Tempest::Vec3 top  = {};
-      Tempest::Vec3 z    = {};
-
-      Tempest::Vec3 leftA = {};
-      Tempest::Vec3 topA  = {0,1,0};
-
-      Tempest::Matrix4x4 vp;
-      };
-
     void       setViewerPos(const Tempest::Vec3& pos);
 
     void       resetTicks();
@@ -44,14 +32,14 @@ class PfxObjects final {
 
   private:
     struct SpriteEmitter {
-      uint8_t                     visualCamAlign = 0;
+      phoenix::sprite_alignment   visualCamAlign = phoenix::sprite_alignment::none;
       int32_t                     zBias          = 0;
-      ZMath::float2               decalDim = {};
+      Tempest::Vec2               decalDim = {};
       std::unique_ptr<ParticleFx> pfx;
       };
 
     PfxBucket&                    getBucket(const ParticleFx& decl);
-    PfxBucket&                    getBucket(const Material& mat, const ZenLoad::zCVobData& vob);
+    PfxBucket&                    getBucket(const Material& mat, const phoenix::vob& vob);
 
     WorldView&                    world;
     const SceneGlobals&           scene;
@@ -63,8 +51,6 @@ class PfxObjects final {
 
     Tempest::Vec3                 viewerPos={};
     uint64_t                      lastUpdate=0;
-
-    TrlObjects                    trails;
 
   friend class PfxEmitter;
   friend class TrlObjects;

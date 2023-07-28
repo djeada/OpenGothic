@@ -1,7 +1,8 @@
 #pragma once
 
 #include <Tempest/Matrix4x4>
-#include <zenload/zCModelMeshLib.h>
+
+#include <phoenix/model_hierarchy.hh>
 
 #include <vector>
 #include <array>
@@ -10,7 +11,7 @@
 
 class Skeleton final {
   public:
-    Skeleton(const ZenLoad::zCModelMeshLib& src, const Animation* anim, std::string_view name);
+    Skeleton(const phoenix::model_hierarchy& src, const Animation* anim, std::string_view name);
 
     struct Node final {
       size_t             parent=size_t(-1);
@@ -26,18 +27,19 @@ class Skeleton final {
 
     size_t                          BIP01_HEAD = size_t(-1);
 
-    ZMath::float3                   bboxCol[2]={};
+    Tempest::Vec3                   bboxCol[2]={};
 
-    size_t                          findNode(std::string_view   name,size_t def=size_t(-1)) const;
+    size_t                          findNode(std::string_view name, size_t def=size_t(-1)) const;
+    size_t                          findRootNode() const;
 
-    const std::string&              name() const { return fileName; }
+    std::string_view                name() const { return fileName; }
     const Animation::Sequence*      sequence(std::string_view name) const;
     const Animation*                animation() const { return anim; }
-    void                            debug() const;
-    const std::string&              defaultMesh() const;
+    std::string_view                defaultMesh() const;
 
     float                           colisionHeight() const;
-    float                           colisionRadius() const;
+
+    void                            debug() const;
 
   private:
     std::string      fileName;

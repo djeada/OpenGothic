@@ -20,10 +20,10 @@ struct GameMusic::MusicProducer : Tempest::SoundProducer {
     }
 
   void updateTheme() {
-    Daedalus::GEngineClasses::C_MusicTheme theme;
-    bool                                   updateTheme=false;
-    bool                                   reloadTheme=false;
-    Tags                                   tags=Tags::Day;
+    phoenix::c_music_theme  theme;
+    bool                    updateTheme = false;
+    bool                    reloadTheme = false;
+    Tags                    tags        = Tags::Day;
 
     {
       std::lock_guard<std::mutex> guard(pendingSync);
@@ -42,7 +42,7 @@ struct GameMusic::MusicProducer : Tempest::SoundProducer {
 
     try {
       if(reloadTheme) {
-        Dx8::PatternList p = Resources::loadDxMusic(theme.file.c_str());
+        Dx8::PatternList p = Resources::loadDxMusic(theme.file);
 
         Dx8::Music m;
         m.addPattern(p);
@@ -70,11 +70,11 @@ struct GameMusic::MusicProducer : Tempest::SoundProducer {
       mix.setMusicVolume(theme.vol);
       }
     catch(std::runtime_error&) {
-      Log::e("unable to load sound: \"",theme.file.c_str(),"\"");
+      Log::e("unable to load sound: \"",theme.file,"\"");
       }
     }
 
-  bool setMusic(const Daedalus::GEngineClasses::C_MusicTheme &theme, Tags tags){
+  bool setMusic(const phoenix::c_music_theme &theme, Tags tags){
     std::lock_guard<std::mutex> guard(pendingSync);
     reloadTheme  = pendingMusic.file!=theme.file;
     pendingMusic = theme;
@@ -110,7 +110,7 @@ struct GameMusic::MusicProducer : Tempest::SoundProducer {
   std::atomic_bool                       enable{true};
   bool                                   hasPending=false;
   bool                                   reloadTheme=false;
-  Daedalus::GEngineClasses::C_MusicTheme pendingMusic;
+  phoenix::c_music_theme                 pendingMusic;
   Tags                                   pendingTags=Tags::Day;
   Tags                                   currentTags=Tags::Day;
   };
@@ -119,11 +119,13 @@ struct GameMusic::Impl final {
   Impl() {
     std::unique_ptr<MusicProducer> mix(new MusicProducer());
     dxMixer = mix.get();
-    sound   = device.load(std::move(mix));
     dxMixer->setVolume(0.5f);
+
+    sound = device.load(std::move(mix));
+    sound.play();
     }
 
-  void setMusic(const Daedalus::GEngineClasses::C_MusicTheme &theme, Tags tags) {
+  void setMusic(const phoenix::c_music_theme &theme, Tags tags) {
     dxMixer->setMusic(theme,tags);
     }
 
@@ -135,8 +137,8 @@ struct GameMusic::Impl final {
     if(isEnabled()==e)
       return;
     if(e) {
-      sound.play();
       dxMixer->restartMusic();
+      sound.play();
       } else {
       dxMixer->stopMusic();
       }
@@ -193,7 +195,7 @@ void GameMusic::setMusic(GameMusic::Music m) {
     setMusic(*theme,GameMusic::mkTags(GameMusic::Std,GameMusic::Day));
   }
 
-void GameMusic::setMusic(const Daedalus::GEngineClasses::C_MusicTheme &theme, Tags tags) {
+void GameMusic::setMusic(const phoenix::c_music_theme &theme, Tags tags) {
   impl->setMusic(theme,tags);
   }
 

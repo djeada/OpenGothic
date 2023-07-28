@@ -5,7 +5,9 @@
 #include <Tempest/Timer>
 #include <Tempest/Color>
 
-#include <daedalus/DaedalusVM.h>
+#include <phoenix/vm.hh>
+#include <phoenix/ext/daedalus_classes.hh>
+
 #include <memory>
 
 #include "game/savegameheader.h"
@@ -19,7 +21,7 @@ class GthFont;
 
 class GameMenu : public Tempest::Widget {
   public:
-    GameMenu(MenuRoot& owner, KeyCodec& keyCodec, Daedalus::DaedalusVM& vm, const char *menuSection, KeyCodec::Action keyClose);
+    GameMenu(MenuRoot& owner, KeyCodec& keyCodec, phoenix::vm& vm, std::string_view menuSection, KeyCodec::Action keyClose);
     ~GameMenu() override;
 
     void setPlayer(const Npc& pl);
@@ -50,7 +52,7 @@ class GameMenu : public Tempest::Widget {
     struct SavNameDialog;
     struct Item {
       std::string                           name;
-      Daedalus::GEngineClasses::C_Menu_Item handle={};
+      std::shared_ptr<phoenix::c_menu_item> handle={};
       const Tempest::Texture2d*             img=nullptr;
       SaveGameHeader                        savHdr;
       Tempest::Pixmap                       savPriview;
@@ -61,18 +63,18 @@ class GameMenu : public Tempest::Widget {
 
     MenuRoot&                             owner;
     KeyCodec&                             keyCodec;
-    Daedalus::DaedalusVM&                 vm;
+    phoenix::vm&                vm;
     Tempest::Timer                        timer;
     const Tempest::Texture2d*             up   = nullptr;
     const Tempest::Texture2d*             down = nullptr;
 
-    Daedalus::GEngineClasses::C_Menu      menu={};
+    std::shared_ptr<phoenix::c_menu> menu={};
     const Tempest::Texture2d*             back=nullptr;
     const Tempest::Texture2d*             slider=nullptr;
     Tempest::Texture2d                    savThumb;
     std::vector<char>                     textBuf;
 
-    Item                                  hItems[Daedalus::GEngineClasses::MenuConstants::MAX_ITEMS];
+    Item                                  hItems[phoenix::c_menu::item_count];
     Item*                                 ctrlInput = nullptr;
     uint32_t                              curItem=0;
     bool                                  exitFlag=false;
@@ -92,38 +94,37 @@ class GameMenu : public Tempest::Widget {
     void                                  initItems();
     void                                  getText(const Item &it, std::vector<char>& out);
     const GthFont&                        getTextFont(const Item &it);
-    static bool                           isSelectable(const Daedalus::GEngineClasses::C_Menu_Item& item);
-    static bool                           isEnabled(const Daedalus::GEngineClasses::C_Menu_Item& item);
+    static bool                           isSelectable(const std::shared_ptr<phoenix::c_menu_item>& item);
+    static bool                           isEnabled(const std::shared_ptr<phoenix::c_menu_item>& item);
+    static bool                           isHidden(const std::shared_ptr<phoenix::c_menu_item>& item);
 
     void                                  exec         (Item &item, int slideDx);
     void                                  execSingle   (Item &it,   int slideDx);
     void                                  execChgOption(Item &item, int slideDx);
     void                                  execSaveGame (const Item& item);
     void                                  execLoadGame (const Item& item);
-    void                                  execCommands (const Daedalus::ZString str, bool isClick);
+    void                                  execCommands (std::string str, bool isClick);
 
     bool                                  implUpdateSavThumb(Item& sel);
     size_t                                saveSlotId(const Item& sel);
 
-    const char*                           strEnum(const char* en, int id, std::vector<char> &out);
-    size_t                                strEnumSize(const char* en);
+    std::string_view                      strEnum(std::string_view en, int id, std::vector<char> &out);
+    size_t                                strEnumSize(std::string_view en);
 
     void                                  updateValues();
     void                                  updateItem    (Item &item);
     void                                  updateSavTitle(Item& sel);
     void                                  updateSavThumb(Item& sel);
     void                                  updateVideo();
-    void                                  setDefaultKeys(const char* preset);
+    void                                  setDefaultKeys(std::string_view preset);
 
-    static bool                           isInGameAndAlive();
-    static QuestStat                      toStatus(const Daedalus::ZString& str);
+    static QuestStat                      toStatus(std::string_view str);
     static bool                           isCompatible(const QuestLog::Quest& q, QuestStat st);
     static int32_t                        numQuests(const QuestLog* q, QuestStat st);
 
     void                                  set(std::string_view item, const Tempest::Texture2d* value);
     void                                  set(std::string_view item, const uint32_t value);
     void                                  set(std::string_view item, const int32_t  value);
-    void                                  set(std::string_view item, const int32_t  value,const char* post);
     void                                  set(std::string_view item, const int32_t  value, const int32_t max);
-    void                                  set(std::string_view item, const char* value);
+    void                                  set(std::string_view item, std::string_view value);
   };

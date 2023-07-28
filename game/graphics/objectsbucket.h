@@ -10,8 +10,8 @@
 #include "resources.h"
 #include "sceneglobals.h"
 #include "matrixstorage.h"
-#include "ubostorage.h"
-#include "graphics/mesh/protomesh.h"
+#include "graphics/mesh/submesh/staticmesh.h"
+#include "graphics/mesh/submesh/animmesh.h"
 #include "graphics/dynamic/visibilitygroup.h"
 #include "graphics/dynamic/visibleset.h"
 
@@ -71,12 +71,15 @@ class ObjectsBucket {
         void   setObjMatrix(const Tempest::Matrix4x4& mt);
         void   setAsGhost  (bool g);
         void   setFatness  (float f);
-        void   setWind     (ZenLoad::AnimMode m, float intensity);
+        void   setWind     (phoenix::animation_mode m, float intensity);
         void   startMMAnim (std::string_view anim, float intensity, uint64_t timeUntil);
+        void   setPfxData  (const Tempest::StorageBuffer* ssbo, uint8_t fId);
 
-        const Bounds& bounds() const;
-
-        void   draw(Tempest::Encoder<Tempest::CommandBuffer>& p, uint8_t fId) const;
+        const Material&    material() const;
+        const Bounds&      bounds()   const;
+        Tempest::Matrix4x4 position() const;
+        const StaticMesh*  mesh()     const;
+        std::pair<uint32_t,uint32_t> meshSlice() const;
 
       private:
         ObjectsBucket* owner=nullptr;
@@ -99,14 +102,12 @@ class ObjectsBucket {
     const void*               meshPointer()   const;
     VisibleSet&               visibilitySet() { return visSet; };
 
-    size_t                    size()      const { return valSz;      }
+    size_t                    size()          const { return valSz;      }
     size_t                    alloc(const StaticMesh& mesh, size_t iboOffset, size_t iboLen, const Bounds& bounds,
                                     const Material& mat);
     size_t                    alloc(const AnimMesh& mesh, size_t iboOffset, size_t iboLen,
                                     const MatrixStorage::Id& anim);
-
-    size_t                    alloc(const Tempest::VertexBuffer<Vertex>* vbo[],
-                                    const Bounds& bounds);
+    size_t                    alloc(const Bounds& bounds);
     void                      free(const size_t objId);
 
     virtual void              setupUbo();
@@ -118,14 +119,13 @@ class ObjectsBucket {
     void                      draw       (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId);
     void                      drawGBuffer(Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId);
     void                      drawShadow (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId, int layer);
-    void                      draw       (size_t id, Tempest::Encoder<Tempest::CommandBuffer>& p, uint8_t fId);
 
   protected:
     enum UboLinkpackage : uint8_t {
       L_Scene    = 0,
       L_Matrix   = 1,
       L_MeshDesc = L_Matrix,
-      L_Material = 2,
+      L_Bucket   = 2,
       L_Ibo      = 3,
       L_Vbo      = 4,
       L_Diffuse  = 5,
@@ -133,10 +133,10 @@ class ObjectsBucket {
       L_Shadow1  = 7,
       L_MorphId  = 8,
       L_Morph    = 9,
-      L_GDiffuse = 10,
+      L_Pfx      = L_MorphId,
+      L_SceneClr = 10,
       L_GDepth   = 11,
       L_HiZ      = 12,
-      L_SkyLut   = 13,
       };
 
     struct ShLight final {
@@ -155,22 +155,23 @@ class ObjectsBucket {
       };
 
     struct UboPushBase {
-      uint32_t  meshletBase  = 0;
-      uint32_t  meshletCount = 0;
-      float     fatness      = 0;
+      uint32_t  meshletBase        = 0;
+      int32_t   meshletPerInstance = 0;
+      uint32_t  firstInstance      = 0;
+      uint32_t  instanceCount      = 0;
+      float     fatness            = 0;
+      float     padd[3]            = {};
       };
 
     struct UboPush : UboPushBase {
-      uint32_t  padd0 = 0;
       MorphDesc morph[Resources::MAX_MORPH_LAYERS];
       };
 
-    struct UboBucket final {
-      Tempest::Vec4 bbox[2];
-      Tempest::Vec2 texAniMapDir;
-      float         bboxRadius = 0;
-      float         waveAnim = 0;
-      float         waveMaxAmplitude = 0;
+    struct BucketDesc final {
+      Tempest::Vec4  bbox[2];
+      Tempest::Point texAniMapDirPeriod;
+      float          bboxRadius = 0;
+      float          waveMaxAmplitude = 0;
       };
 
     struct Descriptors final {
@@ -186,13 +187,13 @@ class ObjectsBucket {
       };
 
     struct Object final {
-      const Tempest::VertexBuffer<Vertex>*  vboM[Resources::MaxFramesInFlight] = {};
+      const Tempest::StorageBuffer*         pfx[Resources::MaxFramesInFlight] = {};
       size_t                                iboOffset = 0;
       size_t                                iboLength = 0;
       Tempest::Matrix4x4                    pos;
       VisibilityGroup::Token                visibility;
       float                                 fatness = 0;
-      ZenLoad::AnimMode                     wind = ZenLoad::AnimMode::NONE;
+      phoenix::animation_mode               wind = phoenix::animation_mode::none;
       float                                 windIntensity = 0;
       uint64_t                              timeShift=0;
 
@@ -203,32 +204,41 @@ class ObjectsBucket {
       bool                                  isValid = false;
       };
 
-    virtual Object& implAlloc(const Bounds& bounds, const Material& mat);
-    virtual void    postAlloc(Object& obj, size_t objId);
-    virtual void    implFree(const size_t objId);
+    using Bucket = Tempest::UniformBuffer<BucketDesc>;
 
-    void            uboSetCommon  (Descriptors& v, const Material& mat);
-    void            uboSetSkeleton(Descriptors& v, uint8_t fId);
-    void            uboSetDynamic (Descriptors& v, Object& obj, uint8_t fId);
-    void            uboUpdateBucketDesc(uint8_t fId);
+    virtual Object&           implAlloc(const Bounds& bounds, const Material& mat);
+    virtual void              postAlloc(Object& obj, size_t objId);
+    virtual void              implFree(const size_t objId);
+    Bucket                    allocBucketDesc(const Material& mat);
 
-    void            setObjMatrix(size_t i, const Tempest::Matrix4x4& m);
-    void            setBounds   (size_t i, const Bounds& b);
-    void            startMMAnim (size_t i, std::string_view anim, float intensity, uint64_t timeUntil);
-    void            setFatness  (size_t i, float f);
-    void            setWind     (size_t i, ZenLoad::AnimMode m, float intensity);
+    void                      uboSetCommon  (Descriptors& v, const Material& mat, const Bucket& bucket);
+    void                      uboSetSkeleton(Descriptors& v, uint8_t fId);
+    void                      uboSetDynamic (Descriptors& v, Object& obj, uint8_t fId);
 
-    bool            isSceneInfoRequired() const;
-    void            updatePushBlock(UboPush& push, Object& v);
-    void            reallocObjPositions();
-    void            invalidateInstancing();
-    uint32_t        applyInstancing(size_t& i, const size_t* index, size_t indSz) const;
+    void                      setObjMatrix(size_t i, const Tempest::Matrix4x4& m);
+    void                      setBounds   (size_t i, const Bounds& b);
+    void                      startMMAnim (size_t i, std::string_view anim, float intensity, uint64_t timeUntil);
+    void                      setFatness  (size_t i, float f);
+    void                      setWind     (size_t i, phoenix::animation_mode m, float intensity);
+    virtual void              setPfxData  (size_t i, const Tempest::StorageBuffer* ssbo, uint8_t fId);
 
-    virtual Descriptors& objUbo(size_t objId);
-    virtual void         drawCommon(Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId,
-                                    const Tempest::RenderPipeline& shader, SceneGlobals::VisCamera c, bool isHiZPass);
+    static bool               isAnimated(const Material& mat);
+    bool                      isForwardShading() const;
+    bool                      isShadowmapRequired() const;
+    bool                      isSceneInfoRequired() const;
+    void                      updatePushBlock(UboPush& push, Object& v, uint32_t instance, uint32_t instanceCount);
+    void                      reallocObjPositions();
+    void                      invalidateInstancing();
+    uint32_t                  applyInstancing(size_t& i, const size_t* index, size_t indSz) const;
+
+    virtual Descriptors&      objUbo(size_t objId);
+    virtual void              drawCommon(Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId,
+                                         const Tempest::RenderPipeline& shader, SceneGlobals::VisCamera c, bool isHiZPass);
 
     const Bounds&             bounds(size_t i) const;
+    Tempest::Matrix4x4        position(size_t i) const;
+    virtual const Material&   material(size_t i) const;
+    std::pair<uint32_t,uint32_t> meshSlice(size_t i) const;
 
     Tempest::BufferHeap       ssboHeap() const;
     static Type               sanitizeType(const Type t, const Material& mat, const StaticMesh* st);
@@ -249,19 +259,19 @@ class ObjectsBucket {
     bool                      useMeshlets         = false;
     bool                      textureInShadowPass = false;
 
-    const Tempest::RenderPipeline* pMain    = nullptr;
-    const Tempest::RenderPipeline* pGbuffer = nullptr;
-    const Tempest::RenderPipeline* pShadow  = nullptr;
+    const Tempest::RenderPipeline* pMain      = nullptr;
+    const Tempest::RenderPipeline* pShadow    = nullptr;
 
-    Material                  mat;
     const SceneGlobals&       scene;
-
-    Tempest::UniformBuffer<UboBucket> uboBucket[Resources::MaxFramesInFlight];
 
     InstancingType            instancingType      = NoInstancing;
     bool                      useSharedUbo        = false;
     bool                      usePositionsSsbo    = false;
     bool                      windAnim            = false;
+
+  private:
+    Material                  mat;
+    Bucket                    bucketShared;
   };
 
 
@@ -270,28 +280,32 @@ class ObjectsBucketDyn : public ObjectsBucket {
     ObjectsBucketDyn(const Type type, const Material& mat, VisualObjects& owner, const SceneGlobals& scene,
                      const StaticMesh* st, const AnimMesh* anim, const Tempest::StorageBuffer* desc);
 
-    void    preFrameUpdate(uint8_t fId) override;
+    void         preFrameUpdate(uint8_t fId) override;
 
   private:
-    Object& implAlloc(const Bounds& bounds, const Material& mat) override;
-    void    implFree (const size_t objId) override;
+    Object&      implAlloc(const Bounds& bounds, const Material& mat) override;
+    void         implFree (const size_t objId) override;
 
     Descriptors& objUbo(size_t objId) override;
+    void         setPfxData  (size_t i, const Tempest::StorageBuffer* ssbo, uint8_t fId) override;
+    const Material& material(size_t i) const override;
 
-    void    setupUbo() override;
-    void    invalidateUbo(uint8_t fId) override;
-    void    fillTlas(std::vector<Tempest::RtInstance>& inst, std::vector<uint32_t>& iboOff, Bindless& out) override;
+    void         setupUbo() override;
+    void         invalidateUbo(uint8_t fId) override;
+    void         fillTlas(std::vector<Tempest::RtInstance>& inst, std::vector<uint32_t>& iboOff, Bindless& out) override;
 
-    void    invalidateDyn();
+    void         invalidateDyn();
 
-    void    drawCommon(Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId,
-                       const Tempest::RenderPipeline& shader, SceneGlobals::VisCamera c, bool isHiZPass) override;
-    void    drawHiZ   (Tempest::Encoder<Tempest::CommandBuffer> &cmd, uint8_t fId) override;
+    void         drawCommon(Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId,
+                            const Tempest::RenderPipeline& shader, SceneGlobals::VisCamera c, bool isHiZPass) override;
+    void         drawHiZ   (Tempest::Encoder<Tempest::CommandBuffer> &cmd, uint8_t fId) override;
 
-    Descriptors uboObj[CAPACITY];
-    Material    mat[CAPACITY];
-    bool        hasDynMaterials = false;
+    Descriptors  uboObj   [CAPACITY];
+
+    Material     mat      [CAPACITY];
+    Bucket       bucketObj[CAPACITY];
+    bool         hasDynMaterials = false;
 
     const Tempest::RenderPipeline* pHiZ = nullptr;
-    Descriptors uboHiZ;
+    Descriptors                    uboHiZ;
   };

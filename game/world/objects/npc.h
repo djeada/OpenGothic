@@ -8,7 +8,6 @@
 #include "game/movealgo.h"
 #include "game/inventory.h"
 #include "game/fightalgo.h"
-#include "game/perceptionmsg.h"
 #include "game/gamescript.h"
 #include "physics/dynamicworld.h"
 #include "world/aiqueue.h"
@@ -19,7 +18,7 @@
 #include <string>
 #include <deque>
 
-#include <daedalus/DaedalusVM.h>
+#include <phoenix/ext/daedalus_classes.hh>
 
 class Interactive;
 class WayPoint;
@@ -57,17 +56,21 @@ class Npc final {
 
       CS_Invest_0    = 16,
       CS_Invest_1    = 17,
-      CS_Invest_2    = 19,
-      CS_Invest_3    = 20,
-      CS_Invest_4    = 21,
-      CS_Invest_5    = 22,
-      CS_Invest_6    = 23,
+      CS_Invest_2    = 18,
+      CS_Invest_3    = 19,
+      CS_Invest_4    = 20,
+      CS_Invest_5    = 21,
+      CS_Invest_6    = 22,
       CS_Invest_Last = 31,
+
       CS_Cast_0      = 32,
       CS_Cast_1      = 33,
       CS_Cast_2      = 34,
       CS_Cast_3      = 35,
       CS_Cast_Last   = 47,
+
+      CS_Emit_0      = 48,
+      CS_Emit_Last   = 63,
       };
 
     using Anim = AnimationSolver::Anim;
@@ -90,7 +93,7 @@ class Npc final {
     auto       transform()  const -> Tempest::Matrix4x4;
     auto       position()   const -> Tempest::Vec3;
     auto       cameraBone(bool isFirstPerson = false) const -> Tempest::Vec3;
-    float      collisionRadius() const;
+    auto       cameraMatrix(bool isFirstPerson = false) const -> Tempest::Matrix4x4;
     float      rotation() const;
     float      rotationRad() const;
     float      rotationY() const;
@@ -141,7 +144,7 @@ class Npc final {
     void       delOverlay   (std::string_view sk);
     void       delOverlay   (const Skeleton*  sk);
 
-    bool       toogleTorch();
+    bool       toggleTorch();
     void       setTorch(bool use);
     bool       isUsingTorch() const;
 
@@ -151,6 +154,7 @@ class Npc final {
     void       updateArmour  ();
     void       setSword      (MeshObjects::Mesh&& sword);
     void       setRangeWeapon(MeshObjects::Mesh&& bow);
+    void       setShield     (MeshObjects::Mesh&& shield);
     void       setMagicWeapon(Effect&& spell);
     void       setSlotItem   (MeshObjects::Mesh&& itm, std::string_view slot);
     void       setStateItem  (MeshObjects::Mesh&& itm, std::string_view slot);
@@ -169,13 +173,14 @@ class Npc final {
     void       startFaceAnim(std::string_view anim, float intensity, uint64_t duration);
     bool       stopItemStateAnim();
     bool       hasAnim(std::string_view scheme) const;
+    bool       hasSwimAnimations() const;
     bool       isFinishingMove() const;
 
     auto       animMoveSpeed(uint64_t dt) const -> Tempest::Vec3;
 
     bool       isJumpAnim() const;
     bool       isFlyAnim() const;
-    bool       isFaling() const;
+    bool       isFalling() const;
     bool       isSlide() const;
     bool       isInAir() const;
     bool       isStanding() const;
@@ -189,7 +194,7 @@ class Npc final {
 
     void       setTalentValue(Talent t,int32_t lvl);
     int32_t    talentValue(Talent t) const;
-    int32_t    hitChanse(Talent t) const;
+    int32_t    hitChance(Talent t) const;
 
     void       setRefuseTalk(uint64_t milis);
     bool       isRefuseTalk() const;
@@ -222,12 +227,13 @@ class Npc final {
     Attitude  tempAttitude() const { return tmpAttitude; }
 
     void      startDialog(Npc& other);
-    bool      startState(ScriptFn id, const Daedalus::ZString& wp);
-    bool      startState(ScriptFn id, const Daedalus::ZString& wp, gtime endTime, bool noFinalize);
+    bool      startState(ScriptFn id, std::string_view wp);
+    bool      startState(ScriptFn id, std::string_view wp, gtime endTime, bool noFinalize);
     void      clearState(bool noFinalize);
     BodyState bodyState() const;
     BodyState bodyStateMasked() const;
     bool      hasState(BodyState s) const;
+    bool      hasStateFlag(BodyState flg) const;
 
     void      setToFightMode(const size_t item);
     void      setToFistMode();
@@ -238,7 +244,7 @@ class Npc final {
     bool      canSwitchWeapon() const;
     bool      closeWeapon(bool noAnim);
     bool      drawWeaponFist();
-    bool      drawWeaponMele();
+    bool      drawWeaponMelee();
     bool      drawWeaponBow();
     bool      drawMage(uint8_t slot);
     bool      drawSpell(int32_t spell);
@@ -253,22 +259,21 @@ class Npc final {
     bool      swingSwordR();
     bool      blockSword();
     bool      beginCastSpell();
-    void      endCastSpell();
+    void      endCastSpell(bool playerCtrl = false);
     void      setActiveSpellInfo(int32_t info);
     int32_t   activeSpellLevel() const;
-    bool      castSpell();
     bool      aimBow();
     bool      shootBow(Interactive* focOverride = nullptr);
-    bool      hasAmunition() const;
+    bool      hasAmmunition() const;
 
     bool      isEnemy(const Npc& other) const;
     bool      isDead() const;
     bool      isUnconscious() const;
     bool      isDown() const;
-    bool      isAtack() const;
+    bool      isAttack() const;
     bool      isTalk() const;
 
-    bool      isAtackAnim() const;
+    bool      isAttackAnim() const;
     bool      isPrehit() const;
     bool      isImmortal() const;
 
@@ -283,7 +288,7 @@ class Npc final {
 
     auto      interactive() const -> Interactive* { return currentInteract; }
     bool      setInteraction(Interactive* id, bool quick=false);
-    void      quitIneraction();
+    void      quitInteraction();
     void      processDefInvTorch();
 
     auto      detectedMob() const -> Interactive*;
@@ -312,9 +317,10 @@ class Npc final {
     void      startDive();
     void      transformBack();
 
-    auto      dialogChoises(Npc &player, const std::vector<uint32_t> &except, bool includeImp) -> std::vector<GameScript::DlgChoise>;
+    auto      dialogChoices(Npc &player, const std::vector<uint32_t> &except, bool includeImp) -> std::vector<GameScript::DlgChoice>;
 
-    auto      handle() -> Daedalus::GEngineClasses::C_Npc* { return  &hnpc; }
+    phoenix::c_npc&                        handle() { return *hnpc; }
+    const std::shared_ptr<phoenix::c_npc>& handlePtr() const { return hnpc; }
 
     auto      inventory() const -> const Inventory& { return invent; }
     size_t    itemCount  (size_t id) const;
@@ -337,7 +343,7 @@ class Npc final {
     void      dropItem   (size_t id,                     size_t count=1);
     void      clearInventory();
     Item*     currentArmour();
-    Item*     currentMeleWeapon();
+    Item*     currentMeleeWeapon();
     Item*     currentRangeWeapon();
     auto      mapWeaponBone() const -> Tempest::Vec3;
     auto      mapHeadBone() const -> Tempest::Vec3;
@@ -345,6 +351,7 @@ class Npc final {
 
     bool      turnTo  (float dx, float dz, bool anim, uint64_t dt);
     bool      rotateTo(float dx, float dz, float speed, bool anim, uint64_t dt);
+    bool      isRotationAllowed() const;
     auto      playAnimByName(std::string_view name, BodyState bs) -> const Animation::Sequence*;
 
     bool      checkGoToNpcdistance(const Npc& other);
@@ -362,6 +369,7 @@ class Npc final {
     void      stopWalking();
 
     bool      canSeeNpc(const Npc& oth,bool freeLos) const;
+    bool      canSeeSource() const;
     bool      canSeeNpc(float x,float y,float z,bool freeLos) const;
     auto      canSenseNpc(const Npc& oth,bool freeLos, float extRange=0.f) const -> SensesBit;
     auto      canSenseNpc(float x,float y,float z,bool freeLos,bool isNoisy,float extRange=0.f) const -> SensesBit;
@@ -380,7 +388,7 @@ class Npc final {
     bool      haveOutput() const;
     void      setAiOutputBarrier(uint64_t dt, bool overlay);
 
-    bool      doAttack(Anim anim);
+    bool      doAttack(Anim anim, BodyState bs);
     void      commitSpell();
     void      takeDamage(Npc& other, const Bullet* b);
     void      takeDamage(Npc& other, const Bullet* b, const VisualFx* vfx, int32_t splId);
@@ -445,7 +453,7 @@ class Npc final {
     void      tickTimedEvt(Animation::EvCount &ev);
     void      tickRegen(int32_t& v,const int32_t max,const int32_t chg, const uint64_t dt);
     void      setViewPosition(const Tempest::Vec3& pos);
-    bool      tickCast();
+    bool      tickCast(uint64_t dt);
 
     int       aiOutputOrderId() const;
     bool      performOutput(const AiQueue::AiAction &ai);
@@ -454,21 +462,24 @@ class Npc final {
     gtime     endTime(const Routine& r) const;
 
     bool      implPointAt(const Tempest::Vec3& to);
-    bool      implLookAt (uint64_t dt);
+    bool      implLookAtWp(uint64_t dt);
+    bool      implLookAtNpc(uint64_t dt);
     bool      implLookAt (float dx, float dy, float dz, uint64_t dt);
     bool      implTurnTo (const Npc& oth, uint64_t dt);
     bool      implTurnTo (const Npc& oth, bool noAnim, uint64_t dt);
     bool      implTurnTo (float dx, float dz, bool noAnim, uint64_t dt);
     bool      implGoTo   (uint64_t dt);
     bool      implGoTo   (uint64_t dt, float destDist);
-    bool      implAtack  (uint64_t dt);
-    void      adjustAtackRotation(uint64_t dt);
+    bool      implAttack  (uint64_t dt);
+    void      adjustAttackRotation(uint64_t dt);
     bool      implAiTick (uint64_t dt);
     void      implAiWait (uint64_t dt);
     void      implAniWait(uint64_t dt);
     void      implFaiWait(uint64_t dt);
     void      implSetFightMode(const Animation::EvCount& ev);
     bool      implAiFlee(uint64_t dt);
+
+    bool      setGoToLadder();
 
     void      tickRoutine();
     void      nextAiAction(AiQueue& queue, uint64_t dt);
@@ -498,7 +509,7 @@ class Npc final {
 
     World&                         owner;
     // main props
-    Daedalus::GEngineClasses::C_Npc hnpc={};
+    std::shared_ptr<phoenix::c_npc> hnpc={};
     float                          x=0.f;
     float                          y=0.f;
     float                          z=0.f;
@@ -544,6 +555,8 @@ class Npc final {
 
     // spell cast
     CastState                      castLevel        = CS_NoCast;
+    int32_t                        manaInvested     = 0;
+    int32_t                        aiExpectedInvest = 1;
     size_t                         currentSpellCast = size_t(-1);
     uint64_t                       castNextTime     = 0;
     int32_t                        spellInfo        = 0;
@@ -570,7 +583,8 @@ class Npc final {
     Npc*                           currentOther   =nullptr;
     Npc*                           currentVictum  =nullptr;
 
-    Npc*                           currentLookAt  =nullptr;
+    const WayPoint*                currentLookAt=nullptr;
+    Npc*                           currentLookAtNpc=nullptr;
     Npc*                           currentTarget  =nullptr;
     Npc*                           nearestEnemy   =nullptr;
     AiOuputPipe*                   outputPipe     =nullptr;

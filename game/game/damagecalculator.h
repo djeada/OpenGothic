@@ -1,7 +1,8 @@
 #pragma once
 
 #include <tuple>
-#include <daedalus/DaedalusStdlib.h>
+
+#include <phoenix/ext/daedalus_classes.hh>
 
 #include "game/constants.h"
 
@@ -11,25 +12,21 @@ class Bullet;
 class DamageCalculator {
   public:
     enum {
-      MinDamage = 5
-      };
-
-    enum {
-      DAM_INDEX_MAX = Daedalus::GEngineClasses::DAM_INDEX_MAX
+      MinDamage = 5,
       };
 
     struct Val final {
       Val()=default;
       Val(int32_t v,bool b):value(v),hasHit(b){}
-      Val(int32_t v,bool b,bool i):value(v),hasHit(b),invinsible(i){}
+      Val(int32_t v,bool b,bool i):value(v),hasHit(b),invincible(i){}
 
       int32_t value      = 0;
       bool    hasHit     = false;
-      bool    invinsible = false;
+      bool    invincible = false;
       };
 
     struct Damage final {
-      int32_t  val[DAM_INDEX_MAX] = {};
+      int32_t  val[phoenix::damage_type::count] = {};
       int32_t& operator[](size_t i) { return val[i]; }
       void     operator *= (int32_t v) { for(auto& i:val) i*=v; }
       void     operator /= (int32_t v) { for(auto& i:val) i/=v; }

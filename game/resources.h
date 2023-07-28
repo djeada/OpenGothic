@@ -5,16 +5,15 @@
 #include <Tempest/Device>
 #include <Tempest/SoundDevice>
 
-#include <vdfs/fileIndex.h>
-
-#include <zenload/zCModelMeshLib.h>
-#include <zenload/zCMorphMesh.h>
-#include <zenload/zTypes.h>
+#include <phoenix/vdfs.hh>
+#include <phoenix/world/vob_tree.hh>
 
 #include <tuple>
 #include <string_view>
+#include <map>
 
 #include "graphics/material.h"
+#include "phoenix/Vfs.hh"
 #include "sound/soundfx.h"
 
 class StaticMesh;
@@ -24,7 +23,6 @@ class Animation;
 class AttachBinder;
 class PhysicMeshShape;
 class PfxEmitterMesh;
-class SoundFx;
 class GthFont;
 
 namespace Dx8 {
@@ -79,9 +77,11 @@ class Resources final {
       Tempest::Vec3 color;
       };
 
+    using VobTree = std::vector<std::unique_ptr<phoenix::vob>>;
+
     static Tempest::Device&          device() { return inst->dev; }
     static const char*               renderer();
-    static void                      loadVdfs(const std::vector<std::u16string> &modvdfs);
+    static void                      loadVdfs(const std::vector<std::u16string> &modvdfs, bool modFilter);
 
     static const Tempest::Sampler&   shadowSampler();
 
@@ -93,10 +93,11 @@ class Resources final {
     static const Tempest::Texture2d& fallbackTexture();
     static const Tempest::Texture2d& fallbackBlack();
     static const Tempest::Texture2d* loadTexture(std::string_view name);
+    static const Tempest::Texture2d* loadTexture(Tempest::Color color);
     static const Tempest::Texture2d* loadTexture(std::string_view name, int32_t v, int32_t c);
     static       Tempest::Texture2d  loadTexturePm(const Tempest::Pixmap& pm);
     static auto                      loadTextureAnim(std::string_view name) -> std::vector<const Tempest::Texture2d*>;
-    static       Material            loadMaterial(const ZenLoad::zCMaterialData& src, bool enableAlphaTest);
+    static       Material            loadMaterial(const phoenix::material& src, bool enableAlphaTest);
 
     static const AttachBinder*       bindMesh       (const ProtoMesh& anim, const Skeleton& s);
     static const ProtoMesh*          loadMesh       (std::string_view name);
@@ -106,9 +107,9 @@ class Resources final {
     static Tempest::Sound            loadSoundBuffer(std::string_view name);
 
     static Dx8::PatternList          loadDxMusic(std::string_view name);
-    static const ProtoMesh*          decalMesh(const ZenLoad::zCVobData& vob);
+    static const ProtoMesh*          decalMesh(const phoenix::vob& vob);
 
-    static ZenLoad::oCWorldData      loadVobBundle(std::string_view name);
+    static const VobTree*            loadVobBundle(std::string_view name);
 
     template<class V>
     static Tempest::VertexBuffer<V>  vbo(const V* data,size_t sz){ return inst->dev.vbo(data,sz); }
@@ -130,9 +131,10 @@ class Resources final {
 
     static std::vector<uint8_t>      getFileData(std::string_view name);
     static bool                      getFileData(std::string_view name, std::vector<uint8_t>& dat);
+    static phoenix::buffer           getFileBuffer(std::string_view name);
     static bool                      hasFile    (std::string_view fname);
 
-    static VDFS::FileIndex&          vdfsIndex();
+    static const phoenix::Vfs&       vdfsIndex();
 
     static const Tempest::VertexBuffer<VertexFsq>& fsqVbo();
 
@@ -165,16 +167,16 @@ class Resources final {
     void                  detectVdf(std::vector<Archive>& ret, const std::u16string& root);
 
     Tempest::Texture2d*   implLoadTexture(TextureCache& cache, std::string_view cname);
-    Tempest::Texture2d*   implLoadTexture(TextureCache& cache, std::string &&name, const std::vector<uint8_t> &data);
+    Tempest::Texture2d*   implLoadTexture(TextureCache& cache, std::string &&name, const phoenix::buffer& data);
     ProtoMesh*            implLoadMesh(std::string_view name);
     std::unique_ptr<ProtoMesh> implLoadMeshMain(std::string name);
     std::unique_ptr<Animation> implLoadAnimation(std::string name);
-    ProtoMesh*            implDecalMesh(const ZenLoad::zCVobData& vob);
+    ProtoMesh*            implDecalMesh(const phoenix::vob& vob);
     Tempest::Sound        implLoadSoundBuffer(std::string_view name);
     Dx8::PatternList      implLoadDxMusic(std::string_view name);
     GthFont&              implLoadFont(std::string_view fname, FontType type);
     PfxEmitterMesh*       implLoadEmiterMesh(std::string_view name);
-    ZenLoad::oCWorldData& implLoadVobBundle(std::string_view name);
+    const VobTree*        implLoadVobBundle(std::string_view name);
 
     Tempest::VertexBuffer<Vertex> sphere(int passCount, float R);
 
@@ -196,24 +198,34 @@ class Resources final {
         }
       };
 
+    struct Less {
+      size_t operator()(const Tempest::Color& a, const Tempest::Color& b) const {
+        auto ta = std::make_tuple(a.r(),a.g(),a.b(),a.a());
+        auto tb = std::make_tuple(b.r(),b.g(),b.b(),b.a());
+        return ta<tb;
+        }
+      };
+
     Tempest::Device&                  dev;
     Tempest::SoundDevice              sound;
 
     std::recursive_mutex              sync;
     std::unique_ptr<Dx8::DirectMusic> dxMusic;
-    VDFS::FileIndex                   gothicAssets;
+    phoenix::Vfs                      gothicAssets;
 
     std::vector<uint8_t>              fBuff, ddsBuf;
     Tempest::VertexBuffer<VertexFsq>  fsq;
 
-    TextureCache                                                          texCache;
+    TextureCache                                                      texCache;
+    std::map<Tempest::Color,std::unique_ptr<Tempest::Texture2d>,Less> pixCache;
+    std::unordered_map<std::string,std::unique_ptr<ProtoMesh>>        aniMeshCache;
+    std::unordered_map<DecalK,std::unique_ptr<ProtoMesh>,Hash>        decalMeshCache;
+    std::unordered_map<std::string,std::unique_ptr<Skeleton>>         skeletonCache;
+    std::unordered_map<std::string,std::unique_ptr<Animation>>        animCache;
+    std::unordered_map<BindK,std::unique_ptr<AttachBinder>,Hash>      bindCache;
+    std::unordered_map<std::string,std::unique_ptr<PfxEmitterMesh>>   emiMeshCache;
+    std::unordered_map<std::string,std::unique_ptr<VobTree>>          zenCache;
 
-    std::unordered_map<std::string,std::unique_ptr<ProtoMesh>>            aniMeshCache;
-    std::unordered_map<DecalK,std::unique_ptr<ProtoMesh>,Hash>            decalMeshCache;
-    std::unordered_map<std::string,std::unique_ptr<Skeleton>>             skeletonCache;
-    std::unordered_map<std::string,std::unique_ptr<Animation>>            animCache;
-    std::unordered_map<BindK,std::unique_ptr<AttachBinder>,Hash>          bindCache;
-    std::unordered_map<std::string,std::unique_ptr<PfxEmitterMesh>>       emiMeshCache;
-    std::unordered_map<FontK,std::unique_ptr<GthFont>,Hash>               gothicFnt;
-    std::unordered_map<std::string,ZenLoad::oCWorldData>                  zenCache;
+    std::recursive_mutex                                              syncFont;
+    std::unordered_map<FontK,std::unique_ptr<GthFont>,Hash>           gothicFnt;
   };

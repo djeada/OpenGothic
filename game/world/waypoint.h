@@ -1,15 +1,17 @@
 #pragma once
 
-#include <zenload/zTypes.h>
+#include <phoenix/world/way_net.hh>
+
 #include <limits>
 #include <Tempest/Vec>
 
 class FpLock;
+class Interactive;
 
 class WayPoint final {
   public:
     WayPoint();
-    WayPoint(const ZenLoad::zCWaypointData& dat);
+    WayPoint(const phoenix::way_point& dat);
     WayPoint(const Tempest::Vec3& pos, std::string_view name);
     WayPoint(const Tempest::Vec3& pos, const Tempest::Vec3& dir, std::string_view name);
     WayPoint(const WayPoint&)=default;
@@ -32,7 +34,11 @@ class WayPoint final {
     float dirY=0;
     float dirZ=0;
 
-    Daedalus::ZString name;
+    bool  underWater = false;
+
+    std::string name;
+
+    Interactive* ladder = nullptr;
 
     struct Conn final {
       WayPoint* point=nullptr;
@@ -47,6 +53,7 @@ class WayPoint final {
 
     void connect(WayPoint& w);
     const std::vector<Conn>& connections() const { return conn; }
+    bool hasLadderConn(const WayPoint* w) const;
 
   private:
     mutable uint32_t useCount=0;

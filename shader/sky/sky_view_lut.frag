@@ -22,7 +22,7 @@ vec3 raymarchScattering(vec3 pos, vec3 rayDir, vec3 sunDir, float tMax) {
   vec3  scatteredLight = vec3(0.0);
   vec3  transmittance  = vec3(1.0);
 
-  float oclusion       = 1.0 - textureLod(cloudsLUT, vec2(push.night,0), 0).a;
+  const float clouds = textureLod(cloudsLUT, vec2(push.night,0), 0).a;
 
   for(int i=1; i<=numScatteringSteps; ++i) {
     float t  = (float(i)/numScatteringSteps)*tMax;
@@ -33,15 +33,15 @@ vec3 raymarchScattering(vec3 pos, vec3 rayDir, vec3 sunDir, float tMax) {
     vec3  rayleighScattering;
     vec3  extinction;
     float mieScattering;
-    scatteringValues(newPos, rayleighScattering, mieScattering, extinction);
+    scatteringValues(newPos, clouds, rayleighScattering, mieScattering, extinction);
 
     vec3 sampleTransmittance = exp(-dt*extinction);
 
     vec3 sunTransmittance = textureLUT(tLUT, newPos, sunDir);
     vec3 psiMS            = textureLUT(mLUT, newPos, sunDir);
 
-    vec3 rayleighInScattering = rayleighScattering*(rayleighPhaseValue*sunTransmittance + psiMS)*oclusion;
-    vec3 mieInScattering      = mieScattering     *(miePhaseValue*sunTransmittance      + psiMS)*oclusion;
+    vec3 rayleighInScattering = rayleighScattering*(rayleighPhaseValue*sunTransmittance + psiMS);
+    vec3 mieInScattering      = mieScattering     *(miePhaseValue*sunTransmittance      + psiMS);
     vec3 inScattering         = (rayleighInScattering + mieInScattering);
 
     // Integrated scattering within path segment.
@@ -55,8 +55,13 @@ vec3 raymarchScattering(vec3 pos, vec3 rayDir, vec3 sunDir, float tMax) {
   }
 
 void main() {
-  const vec2 uv      = inPos*vec2(0.5)+vec2(0.5);
-  const vec3 viewPos = vec3(0.0, RPlanet + push.plPosY, 0.0);
+  const vec2 uv       = inPos*vec2(0.5)+vec2(0.5);
+  const vec3 viewPos  = vec3(0.0, RPlanet + push.plPosY, 0.0);
+
+  const float DirectSunLux  = 64000.f;
+  const float DirectMoonLux = 0.27f;
+  const float NightLight    = 0.36f;
+  const float moonInt       = DirectMoonLux/DirectSunLux;
 
   float azimuthAngle = (uv.x - 0.5)*2.0*M_PI;
   // Non-linear mapping of altitude. See Section 5.3 of the paper.
@@ -85,6 +90,7 @@ void main() {
   float tMax        = (groundDist < 0.0) ? atmoDist : groundDist;
 
   vec3  sun  = raymarchScattering(viewPos, rayDir, sunDir, tMax);
-  vec3  moon = raymarchScattering(viewPos, rayDir, normalize(vec3(0,2,0)), tMax)*(0.01*push.night)*vec3(0.4,0.5,1.0);
+  vec3  moon = raymarchScattering(viewPos, rayDir, vec3(0,1,0), tMax)*push.night*moonInt;
+  // vec3  moon = raymarchScattering(viewPos, rayDir, normalize(vec3(-1,1,0)), tMax)*push.night*moonInt;
   outColor = vec4(sun+moon, 1.0);
   }

@@ -4,12 +4,12 @@
 #include <cctype>
 
 #include "game/definitions/sounddefinitions.h"
-#include "game/gamesession.h"
 #include "gothic.h"
 
 #include "resources.h"
+#include "utils/string_frm.h"
 
-SoundFx::SoundVar::SoundVar(const Daedalus::GEngineClasses::C_SFX &sfx, Tempest::Sound &&snd)
+SoundFx::SoundVar::SoundVar(const phoenix::c_sfx &sfx, Tempest::Sound &&snd)
   :snd(std::move(snd)),vol(float(sfx.vol)/127.f),loop(sfx.loop){
   }
 
@@ -26,7 +26,7 @@ SoundFx::SoundFx(std::string_view s) {
   for(auto& i:name)
     i = char(std::toupper(i));
 
-  implLoad(name.c_str());
+  implLoad(name);
   if(inst.size()!=0)
     return;
 
@@ -58,7 +58,7 @@ Tempest::SoundEffect SoundFx::getEffect(Tempest::SoundDevice &dev, bool& loop) c
 
 void SoundFx::implLoad(std::string_view s) {
   auto& sfx = Gothic::sfx()[s];
-  auto  snd = Resources::loadSoundBuffer(sfx.file.c_str());
+  auto  snd = Resources::loadSoundBuffer(sfx.file);
 
   if(!snd.isEmpty())
     inst.emplace_back(sfx,std::move(snd));
@@ -66,11 +66,10 @@ void SoundFx::implLoad(std::string_view s) {
   }
 
 void SoundFx::loadVariants(std::string_view s) {
-  char name[256]={};
-  for(int i=1;i<100;++i){
-    std::snprintf(name,sizeof(name),"%.*s_A%02d",int(s.size()),s.data(),i);
+  for(int i=1;i<100;++i) {
+    string_frm name(s,"_A",i);
     auto& sfx = Gothic::sfx()[name];
-    auto  snd = Resources::loadSoundBuffer(sfx.file.c_str());
+    auto  snd = Resources::loadSoundBuffer(sfx.file);
     if(snd.isEmpty())
       break;
     inst.emplace_back(sfx,std::move(snd));

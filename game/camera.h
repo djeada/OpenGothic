@@ -4,7 +4,8 @@
 #include <Tempest/Matrix4x4>
 #include <Tempest/Point>
 #include <array>
-#include <daedalus/DaedalusStdlib.h>
+
+#include <phoenix/ext/daedalus_classes.hh>
 
 class World;
 class Npc;
@@ -27,7 +28,21 @@ class Camera final {
       Mobsi,
       Death,
       Swim,
-      Dive
+      Dive,
+      Fall,
+      };
+
+    enum MarvinMode {
+      M_Normal,
+      M_Freeze,
+      M_Free,
+      M_Pinned,
+      };
+
+    struct ListenerPos {
+      Tempest::Vec3 up;
+      Tempest::Vec3 front;
+      Tempest::Vec3 pos;
       };
 
     void reset();
@@ -39,45 +54,60 @@ class Camera final {
     void changeZoom(int delta);
     void setViewport(uint32_t w, uint32_t h);
 
-    void rotateLeft ();
-    void rotateRight();
+    void rotateLeft(uint64_t dt);
+    void rotateRight(uint64_t dt);
 
-    void moveForward();
-    void moveBack();
-    void moveLeft();
-    void moveRight();
+    void moveForward(uint64_t dt);
+    void moveBack(uint64_t dt);
+    void moveLeft(uint64_t dt);
+    void moveRight(uint64_t dt);
 
     void setMode(Mode m);
-    void setToogleEnable(bool e);
-    bool isToogleEnabled() const;
+    void setMarvinMode(MarvinMode m);
+    bool isMarvin() const;
+    bool isFree() const;
+    bool isInWater() const;
+
+    void setToggleEnable(bool e);
+    bool isToggleEnabled() const;
+
+    void setInertiaTargetEnable(bool e);
+    bool isInertiaTargetEnabled() const;
 
     void setFirstPerson(bool fp);
     bool isFirstPerson() const;
 
     void setLookBack(bool lb);
 
-    void toogleDebug();
+    void toggleDebug();
 
     void tick(uint64_t dt);
     void debugDraw(DbgPainter& p);
 
-    Tempest::PointF spin()     const;
-    Tempest::PointF destSpin() const;
+    Tempest::PointF    spin()     const;
+    Tempest::PointF    destSpin() const;
 
-    void            setSpin(const Tempest::PointF& p);
-    void            setDestSpin(const Tempest::PointF& p);
+    void               setSpin(const Tempest::PointF& p);
+    void               setDestSpin(const Tempest::PointF& p);
 
-    void            setPosition(const Tempest::Vec3& pos);
-    void            setDestPosition(const Tempest::Vec3& pos);
+    void               setPosition(const Tempest::Vec3& pos);
+    void               setDestPosition(const Tempest::Vec3& pos);
 
-    void            setDialogDistance(float d);
+    void               setDialogDistance(float d);
 
-    void            onRotateMouse(const Tempest::PointF& dpos);
+    void               onRotateMouse(const Tempest::PointF& dpos);
 
     Tempest::Matrix4x4 projective() const;
     Tempest::Matrix4x4 view() const;
     Tempest::Matrix4x4 viewProj() const;
     Tempest::Matrix4x4 viewShadow(const Tempest::Vec3& ldir, size_t layer) const;
+
+    Tempest::Matrix4x4 viewLwc() const;
+    Tempest::Matrix4x4 viewProjLwc() const;
+    Tempest::Matrix4x4 viewShadowLwc(const Tempest::Vec3& ldir, size_t layer) const;
+
+    ListenerPos        listenerPosition() const;
+    Tempest::Vec3      originLwc() const { return origin; };
 
     float              zNear() const;
     float              zFar()  const;
@@ -89,14 +119,23 @@ class Camera final {
       Tempest::Vec3       target = {};
       };
 
-    Tempest::Vec3         cameraPos = {};
-    Tempest::Vec3         origin    = {};
-    Tempest::Vec3         rotOffset = {};
-    Tempest::Vec3         offsetAng = {};
+    struct Pin {
+      Tempest::Vec3       origin = {};
+      Tempest::Vec3       spin   = {};
+      };
+
+    Tempest::Vec3         cameraPos       = {};
+    Tempest::Vec3         origin          = {};
+    Tempest::Vec3         rotOffset       = {};
+    Tempest::Vec3         offsetAng       = {};
     State                 src, dst;
 
-    float                 dlgDist   = 0;
-    float                 userRange = 0.13f;
+    Pin                   pin;
+
+    float                 dlgDist    = 0;
+    float                 userRange  = 0.13f;
+    float                 targetVelo = 0;
+    float                 veloTrans  = 0;
 
     Tempest::Matrix4x4    proj;
     uint32_t              vpWidth=0;
@@ -108,12 +147,15 @@ class Camera final {
     bool                  lbEnable      = false;
     bool                  inertiaTarget = true;
     Mode                  camMod        = Normal;
+    MarvinMode            camMarvinMod  = M_Normal;
+    bool                  inWater       = false;
 
     mutable int           raysCasted = 0;
 
     static float          maxDist;
     static float          baseSpeeed;
     static float          offsetAngleMul;
+    static const float    minLength;
 
     void                  calcControlPoints(float dtF);
 
@@ -121,9 +163,11 @@ class Camera final {
     Tempest::Vec3         calcOffsetAngles(Tempest::Vec3 srcOrigin, Tempest::Vec3 dstOrigin, Tempest::Vec3 target) const;
     float                 calcCameraColision(const Tempest::Vec3& target, const Tempest::Vec3& origin, const Tempest::Vec3& rotSpin, float dist) const;
 
-    void                  implMove(Tempest::KeyEvent::KeyType t);
+    void                  implMove(Tempest::KeyEvent::KeyType t, uint64_t dt);
     Tempest::Matrix4x4    mkView    (const Tempest::Vec3& pos, const Tempest::Vec3& spin) const;
     Tempest::Matrix4x4    mkRotation(const Tempest::Vec3& spin) const;
+    Tempest::Matrix4x4    mkViewShadow(const Tempest::Vec3& cameraPos, float rotation,
+                                       const Tempest::Matrix4x4& viewProj, const Tempest::Vec3& lightDir, size_t layer) const;
     void                  resetDst();
 
     void                  clampRotation(Tempest::Vec3& spin);
@@ -133,5 +177,5 @@ class Camera final {
     void                  followAng   (Tempest::Vec3& spin, Tempest::Vec3 dest, float dtF);
     static void           followAng   (float& ang, float dest, float speed, float dtF);
 
-    const Daedalus::GEngineClasses::CCamSys& cameraDef() const;
+    const phoenix::c_camera& cameraDef() const;
   };

@@ -43,7 +43,7 @@ void Effect::setupLight(World& owner) {
     }
 
   Vec3 pos3 = {pos.at(3,0),pos.at(3,1),pos.at(3,2)};
-  light = LightGroup::Light(owner,lightPresetName->c_str());
+  light = LightGroup::Light(owner,*lightPresetName);
   light.setPosition(pos3);
   if(key!=nullptr && key->lightRange>0)
     light.setRange(key->lightRange);
@@ -57,11 +57,11 @@ void Effect::setupPfx(World& owner) {
     uint64_t emFXLifeSpan = root->emFXLifeSpan;
     if(key!=nullptr && key->emFXLifeSpan!=0)
       emFXLifeSpan = key->emFXLifeSpan;
-    gfx = owner.addGlobalEffect(root->visName_S,emFXLifeSpan,root->userString,Daedalus::GEngineClasses::VFX_NUM_USERSTRINGS);
+    gfx = owner.addGlobalEffect(root->visName_S,emFXLifeSpan,root->userString, phoenix::c_fx_base::user_string_count);
     return;
     }
 
-  const ParticleFx* pfxDecl = Gothic::inst().loadParticleFx(root->visName_S.c_str());
+  const ParticleFx* pfxDecl = Gothic::inst().loadParticleFx(root->visName_S);
   if(key!=nullptr && key->visName!=nullptr)
     pfxDecl = key->visName;
 
@@ -86,7 +86,7 @@ void Effect::setupSfx(World& owner) {
 
   if(!sfxID.empty()) {
     Vec3 pos3 = {pos.at(3,0),pos.at(3,1),pos.at(3,2)};
-    sfx = ::Sound(owner,::Sound::T_Regular,sfxID.c_str(),pos3,2500.f,false);
+    sfx = ::Sound(owner,::Sound::T_Regular,sfxID,pos3,2500.f,false);
     sfx.setAmbient(sfxIsAmbient);
     sfx.play();
     }
@@ -158,14 +158,14 @@ void Effect::syncAttaches(const Matrix4x4& inPos) {
 void Effect::syncAttachesSingle(const Matrix4x4& inPos) {
   pos = inPos;
 
-  auto  emTrjMode    = VisualFx::TrajectoryNone;
-  float emTrjEaseVel = 0;
+  auto  emTrjMode       = VisualFx::TrajectoryNone;
+  float emTrjTargetElev = 0;
   Vec3  emSelfRotVel;
 
   if(root!=nullptr) {
-    emTrjMode    = root->emTrjMode;
-    emSelfRotVel = root->emSelfRotVel;
-    emTrjEaseVel = root->emTrjTargetElev;
+    emTrjMode       = root->emTrjMode;
+    emSelfRotVel    = root->emSelfRotVel;
+    emTrjTargetElev = root->emTrjTargetElev;
     if(key!=nullptr) {
       if(key->emTrjMode.has_value())
         emTrjMode    = key->emTrjMode.value();
@@ -175,12 +175,19 @@ void Effect::syncAttachesSingle(const Matrix4x4& inPos) {
     }
 
   auto p = inPos;
-  if((emTrjMode&VisualFx::Trajectory::Target) && target!=nullptr) {
-    p = target->transform();
-    } else {
+  if((emTrjMode & VisualFx::Trajectory::Target)==VisualFx::Trajectory::Target && target!=nullptr) {
+    // NOTE: needed for shrink-spell, light-spell
+    p.identity();
+    p.translate(target->mapBone(nodeSlot));
+    }
+  else if(true || emTrjMode != VisualFx::Trajectory::TrajectoryNone) {
     if(pose!=nullptr && boneId<pose->boneCount())
-      p = pose->bone(boneId); else
-      p = inPos;
+      p = pose->bone(boneId);
+    else if(target!=nullptr)
+      p = target->transform();
+    }
+  else {
+    p = inPos;
     }
 
   if(selfRotation!=Vec3() && false) {
@@ -192,9 +199,8 @@ void Effect::syncAttachesSingle(const Matrix4x4& inPos) {
     p.mul(m);
     }
 
-  p.set(3,1, p.at(3,1)+emTrjEaseVel);
+  p.set(3,1, p.at(3,1)+emTrjTargetElev);
   Vec3  pos3 = {p.at(3,0),p.at(3,1),p.at(3,2)};
-
   pfx  .setObjMatrix(p);
   light.setPosition(pos3);
   sfx  .setPosition(pos3);
@@ -260,9 +266,9 @@ uint64_t Effect::effectPrefferedTime() const {
 
   ret = std::max(ret, root==nullptr ? 0 : root->effectPrefferedTime());
   ret = std::max(ret, pfx  .effectPrefferedTime());
-  ret = std::max(ret, sfx  .effectPrefferedTime());
+  // ret = std::max(ret, sfx  .effectPrefferedTime());
   ret = std::max(ret, gfx  .effectPrefferedTime());
-  ret = std::max(ret, light.effectPrefferedTime());
+  // ret = std::max(ret, light.effectPrefferedTime());
   return ret;
   }
 
@@ -284,6 +290,10 @@ void Effect::bindAttaches(const Pose& p, const Skeleton& to) {
   skeleton = &to;
   pose     = &p;
   boneId   = to.findNode(nodeSlot);
+  if(boneId==size_t(-1)) {
+    // case: VOB_MAGICBURN
+    boneId = to.findRootNode();
+    }
   if(root!=nullptr && root->isMeshEmmiter())
     pfx.setMesh(meshEmitter,pose);
   }

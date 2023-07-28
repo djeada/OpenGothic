@@ -1,8 +1,8 @@
 #version 450
+
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_GOOGLE_include_directive : enable
 
-#define VERTEX
 #include "materials_common.glsl"
 #include "vertex_process.glsl"
 
@@ -21,13 +21,16 @@ layout(location = DEBUG_DRAW_LOC) out flat uint debugId;
 void main() {
 #if defined(LVL_OBJECT)
   uint objId = gl_InstanceIndex;
+#elif (MESH_TYPE==T_PFX)
+  uint objId = gl_InstanceIndex;
 #else
   uint objId = 0;
 #endif
 
-  const Varyings out0 = processVertex(gl_Position,objId,gl_VertexIndex);
+  Varyings var;
+  gl_Position = processVertex(var, objId, gl_VertexIndex);
 #if defined(MAT_VARYINGS)
-  shOut = out0;
+  shOut = var;
 #endif
 
 #if DEBUG_DRAW

@@ -1,8 +1,7 @@
 #include "world.h"
 
-#include <zenload/zCMesh.h>
-#include <fstream>
 #include <functional>
+#include <future>
 #include <cctype>
 
 #include <Tempest/Log>
@@ -14,8 +13,10 @@
 #include "world/objects/npc.h"
 #include "world/objects/item.h"
 #include "world/objects/interactive.h"
+#include "world/triggers/abstracttrigger.h"
 #include "game/globaleffects.h"
 #include "game/serialize.h"
+#include "utils/string_frm.h"
 #include "gothic.h"
 #include "focus.h"
 #include "resources.h"
@@ -40,92 +41,103 @@ const char* materialTag(ItemMaterial src) {
   return "UD";
   }
 
-const char* materialTag(ZenLoad::MaterialGroup src) {
+const char* materialTag(phoenix::material_group src) {
   switch(src) {
-    case ZenLoad::MaterialGroup::UNDEF:
-    case ZenLoad::MaterialGroup::NUM_MAT_GROUPS:
+    case phoenix::material_group::undefined:
+    case phoenix::material_group::none:
       return "UD";
-    case ZenLoad::MaterialGroup::METAL:
+    case phoenix::material_group::metal:
       return "ME";
-    case ZenLoad::MaterialGroup::STONE:
+    case phoenix::material_group::stone:
       return "ST";
-    case ZenLoad::MaterialGroup::WOOD:
+    case phoenix::material_group::wood:
       return "WO";
-    case ZenLoad::MaterialGroup::EARTH:
+    case phoenix::material_group::earth:
       return "EA";
-    case ZenLoad::MaterialGroup::WATER:
+    case phoenix::material_group::water:
       return "WA";
-    case ZenLoad::MaterialGroup::SNOW:
+    case phoenix::material_group::snow:
       return "SA"; // sand?
     }
   return "UD";
   }
 
-World::World(GameSession& game, std::string file, bool startup, std::function<void(int)> loadProgress)
-  :wname(std::move(file)),game(game),wsound(game,*this),wobj(*this) {
-  using namespace Daedalus::GameState;
+World::World(GameSession& game, std::string_view file, bool startup, std::function<void(int)> loadProgress)
+  :wname(std::move(file)), game(game), wsound(game,*this), wobj(*this) {
+  const auto* entry = Resources::vdfsIndex().find(wname);
 
-  ZenLoad::ZenParser parser(wname,Resources::vdfsIndex());
-  loadProgress(1);
-  if(parser.getFileSize()==0)
+  if(entry == nullptr) {
     Tempest::Log::e("unable to open Zen-file: \"",wname,"\"");
-  parser.readHeader();
-
-  loadProgress(10);
-  ZenLoad::oCWorldData world;
-
-  auto fver = ZenLoad::ZenParser::FileVersion::Gothic1;
-  if(Gothic::inst().version().game==2)
-    fver = ZenLoad::ZenParser::FileVersion::Gothic2;
+    return;
+    }
 
   try {
-    parser.readWorld(world,fver);
+    auto buf = entry->open();
+    auto world = phoenix::world::parse(buf, version().game == 1 ? phoenix::game_version::gothic_1
+                                                                : phoenix::game_version::gothic_2);
+    loadProgress(20);
+    auto& worldMesh = world.world_mesh;
+
+    auto wdynamicFut = std::async(std::launch::async, [&]() {
+      Workers::setThreadName("Loading: BVH thread");
+      return std::unique_ptr<DynamicWorld>(new DynamicWorld(*this,worldMesh));
+      });
+    auto wviewFut = std::async(std::launch::async, [&]() {
+      Workers::setThreadName("Loading: PackedMesh thread");
+      PackedMesh vmesh(worldMesh,PackedMesh::PK_VisualLnd);
+      return std::unique_ptr<WorldView>(new WorldView(*this,vmesh));
+      });
+
+    loadProgress(30);
+
+    {
+      bsp.nodes             = std::move(world.world_bsp_tree.nodes);
+      bsp.sectors           = std::move(world.world_bsp_tree.sectors);
+      bsp.leaf_node_indices = std::move(world.world_bsp_tree.leaf_node_indices);
+      bsp.sectorsData.resize(bsp.sectors.size());
+      world.world_bsp_tree = phoenix::bsp_tree();
+    }
+    loadProgress(50);
+
+    wview = wviewFut.get();
+    loadProgress(60);
+
+    wdynamic = wdynamicFut.get();
+    loadProgress(70);
+
+    globFx.reset(new GlobalEffects(*this));
+    wmatrix.reset(new WayMatrix(*this,world.world_way_net));
+    for(auto& vob:world.world_vobs)
+      wobj.addRoot(vob,startup);
+
+    wmatrix->buildIndex();
+    loadProgress(100);
     }
   catch(...) {
     Tempest::Log::e("unable to load landscape mesh");
     throw;
     }
-
-  ZenLoad::zCMesh* worldMesh = parser.getWorldMesh();
-  {
-  PackedMesh vmesh(*worldMesh,PackedMesh::PK_VisualLnd);
-  wview.reset   (new WorldView(*this,vmesh));
-  }
-
-  loadProgress(50);
-  wdynamic.reset(new DynamicWorld(*this,*worldMesh));
-  loadProgress(70);
-
-  globFx.reset(new GlobalEffects(*this));
-
-  wmatrix.reset(new WayMatrix(*this,world.waynet));
-  if(1){
-    for(auto& vob:world.rootVobs)
-      wobj.addRoot(std::move(vob),startup);
-    }
-  wmatrix->buildIndex();
-  bsp = std::move(world.bspTree);
-  bspSectors.resize(bsp.sectors.size());
-  loadProgress(100);
   }
 
 World::~World() {
   }
 
 void World::createPlayer(std::string_view cls) {
-  npcPlayer = addNpc(cls,wmatrix->startPoint().name.c_str());
-  if(npcPlayer!=nullptr) {
-    npcPlayer->setProcessPolicy(Npc::ProcessPolicy::Player);
-    game.script()->setInstanceNPC("HERO",*npcPlayer);
-    }
+  size_t id = script().findSymbolIndex(cls);
+  if(id==size_t(-1))
+    return;
+  std::string_view waypoint = wmatrix->startPoint().name;
+  auto             npc      = std::make_unique<Npc>(*this,id,waypoint);
+  npcPlayer = wobj.insertPlayer(std::move(npc),waypoint);
+  npcPlayer->setProcessPolicy(Npc::ProcessPolicy::Player);
+  game.script()->setInstanceNPC("HERO",*npcPlayer);
   }
 
 void World::insertPlayer(std::unique_ptr<Npc> &&npc, std::string_view waypoint) {
   if(npc==nullptr)
     return;
   npcPlayer = wobj.insertPlayer(std::move(npc),waypoint);
-  if(npcPlayer!=nullptr)
-    game.script()->setInstanceNPC("HERO",*npcPlayer);
+  game.script()->setInstanceNPC("HERO",*npcPlayer);
   }
 
 void World::setPlayer(Npc* npc) {
@@ -150,7 +162,7 @@ void World::postInit() {
   // NOTE: level inspector override player stats globaly
   // lvlInspector.reset(new Npc(*this,script().getSymbolIndex("PC_Levelinspektor"),""));
 
-  // game.script()->inserNpc("Snapper",wmatrix->startPoint().name.c_str());
+  // game.script()->inserNpc("Snapper",wmatrix->startPoint().name);
   }
 
 void World::load(Serialize &fin) {
@@ -175,9 +187,9 @@ void World::save(Serialize &fout) {
   fout.setContext(this);
   fout.setEntry("worlds/",wname,"/world");
 
-  fout.write(uint32_t(bspSectors.size()));
-  for(size_t i=0;i<bspSectors.size();++i) {
-    fout.write(bsp.sectors[i].name,bspSectors[i].guild);
+  fout.write(uint32_t(bsp.sectorsData.size()));
+  for(size_t i=0;i<bsp.sectorsData.size();++i) {
+    fout.write(bsp.sectors[i].name,bsp.sectorsData[i].guild);
     }
 
   wobj.save(fout);
@@ -230,7 +242,7 @@ void World::stopEffect(const VisualFx& root) {
   wobj.stopEffect(root);
   }
 
-GlobalFx World::addGlobalEffect(const Daedalus::ZString& what, uint64_t len, const Daedalus::ZString* argv, size_t argc) {
+GlobalFx World::addGlobalEffect(std::string_view what, uint64_t len, const std::string* argv, size_t argc) {
   return globFx->startEffect(what,len,argv,argc);
   }
 
@@ -242,8 +254,8 @@ MeshObjects::Mesh World::addView(std::string_view visual, int32_t headTex, int32
   return view()->addView(visual,headTex,teetTex,bodyColor);
   }
 
-MeshObjects::Mesh World::addView(const Daedalus::GEngineClasses::C_Item& itm) {
-  return view()->addView(itm.visual.c_str(),itm.material,0,itm.material);
+MeshObjects::Mesh World::addView(const phoenix::c_item& itm) {
+  return view()->addView(itm.visual,itm.material,0,itm.material);
   }
 
 MeshObjects::Mesh World::addView(const ProtoMesh* visual) {
@@ -262,7 +274,7 @@ MeshObjects::Mesh World::addStaticView(std::string_view visual) {
   return view()->addStaticView(visual);
   }
 
-MeshObjects::Mesh World::addDecalView(const ZenLoad::zCVobData& vob) {
+MeshObjects::Mesh World::addDecalView(const phoenix::vob& vob) {
   return view()->addDecalView(vob);
   }
 
@@ -282,42 +294,40 @@ Npc *World::findNpcByInstance(size_t instance) {
   return wobj.findNpcByInstance(instance);
   }
 
-const std::string& World::roomAt(const Tempest::Vec3& p) {
-  static std::string empty;
-
+std::string_view World::roomAt(const Tempest::Vec3& p) {
   if(bsp.nodes.empty())
-    return empty;
+    return "";
 
-  const ZenLoad::zCBspNode* node=&bsp.nodes[0];
+  const auto* node=&bsp.nodes[0];
 
   while(true) {
-    const float* v    = node->plane.v;
-    float        sgn  = v[0]*p.x + v[1]*p.y + v[2]*p.z - v[3];
-    uint32_t     next = (sgn>0) ? node->front : node->back;
+    const auto v    = node->plane;
+    float        sgn  = v.x*p.x + v.y*p.y + v.z*p.z - v.w;
+    uint32_t     next = (sgn>0) ? uint32_t(node->front_index) : uint32_t(node->back_index);
     if(next>=bsp.nodes.size())
       break;
 
     node = &bsp.nodes[next];
     }
 
-  if(node->bbox3dMin.x <= p.x && p.x <node->bbox3dMax.x &&
-     node->bbox3dMin.y <= p.y && p.y <node->bbox3dMax.y &&
-     node->bbox3dMin.z <= p.z && p.z <node->bbox3dMax.z) {
+  if(node->bbox.min.x <= p.x && p.x <node->bbox.max.x &&
+     node->bbox.min.y <= p.y && p.y <node->bbox.max.y &&
+     node->bbox.min.z <= p.z && p.z <node->bbox.max.z) {
     return roomAt(*node);
     }
 
-  return empty;
+  return "";
   }
 
-const std::string& World::roomAt(const ZenLoad::zCBspNode& node) {
-  std::string* ret=nullptr;
+std::string_view World::roomAt(const phoenix::bsp_node& node) {
+  const std::string* ret=nullptr;
   size_t       count=0;
   auto         id = &node-bsp.nodes.data();(void)id;
 
   for(auto& i:bsp.sectors) {
-    for(auto r:i.bspNodeIndices)
-      if(r<bsp.leafIndices.size()){
-        size_t idx = bsp.leafIndices[r];
+    for(auto r:i.node_indices)
+      if(r<bsp.leaf_node_indices.size()){
+        size_t idx = bsp.leaf_node_indices[r];
         if(idx>=bsp.nodes.size())
           continue;
         if(&bsp.nodes[idx]==&node) {
@@ -340,7 +350,7 @@ World::BspSector* World::portalAt(std::string_view tag) {
 
   for(size_t i=0;i<bsp.sectors.size();++i)
     if(bsp.sectors[i].name==tag)
-      return &bspSectors[i];
+      return &bsp.sectorsData[i];
   return nullptr;
   }
 
@@ -400,7 +410,7 @@ Focus World::findFocus(const Npc &pl, const Focus& def) {
   WorldObjects::SearchOpt optMob {policy.mob_range1,  policy.mob_range2,  policy.mob_azi,  coll };
   WorldObjects::SearchOpt optItm {policy.item_range1, policy.item_range2, policy.item_azi, coll };
 
-  auto n     = policy.npc_prio <0 ? nullptr : wobj.findNpc        (pl,def.npc,        optNpc);
+  auto n     = policy.npc_prio <0 ? nullptr : wobj.findNpcNear    (pl,def.npc,        optNpc);
   auto it    = policy.item_prio<0 ? nullptr : wobj.findItem       (pl,def.item,       optItm);
   auto inter = policy.mob_prio <0 ? nullptr : wobj.findInteractive(pl,def.interactive,optMob);
   if(pl.weaponState()!=WeaponState::NoWeapon) {
@@ -439,7 +449,7 @@ Focus World::findFocus(const Npc &pl, const Focus& def) {
   }
 
 Focus World::findFocus(const Focus &def) {
-  if(npcPlayer==nullptr)
+  if(npcPlayer==nullptr || npcPlayer->interactive()!=nullptr)
     return Focus();
   return findFocus(*npcPlayer,def);
   }
@@ -453,8 +463,8 @@ bool World::testFocusNpc(Npc* def) {
   return wobj.testFocusNpc(*npcPlayer,def,optNpc);
   }
 
-Interactive *World::aviableMob(const Npc &pl, const char* name) {
-  return wobj.aviableMob(pl,name);
+Interactive *World::availableMob(const Npc &pl, std::string_view name) {
+  return wobj.availableMob(pl,name);
   }
 
 Interactive* World::findInteractive(const Npc& pl) {
@@ -470,7 +480,23 @@ void World::triggerEvent(const TriggerEvent &e) {
   }
 
 void World::execTriggerEvent(const TriggerEvent& e) {
-  wobj.execTriggerEvent(e);
+  if(e.timeBarrier > this->tickCount()) {
+    triggerEvent(std::move(e));
+    return;
+    }
+
+  bool emitted = wobj.execTriggerEvent(e);
+  if(!emitted) {
+    emitted = wsound.execTriggerEvent(e);
+    }
+
+  if(!emitted) {
+    if(e.target=="EVT_LEFT_ROOM_01_TRAP_MOVER_FOR_DMG_MASTER" ||
+       e.target=="EVT_LEFT_UP_01_TOGGLE_TRIGGER_01" ||
+       e.target=="EVT_RIGHT_ROOM_01_SPAWN_ROT_02_SOUND")
+      return; // known problem on dragonisland.zen, skop for now
+    Tempest::Log::d("unable to process trigger: \"",e.target,"\"");
+    }
   }
 
 void World::enableTicks(AbstractTrigger& t) {
@@ -489,11 +515,11 @@ void World::disableCollizionZone(CollisionZone& z) {
   wobj.disableCollizionZone(z);
   }
 
-void World::triggerChangeWorld(const std::string& world, const std::string& wayPoint) {
+void World::triggerChangeWorld(std::string_view world, std::string_view wayPoint) {
   game.changeWorld(world,wayPoint);
   }
 
-void World::setMobRoutine(gtime time, const Daedalus::ZString& scheme, int32_t state) {
+void World::setMobRoutine(gtime time, std::string_view scheme, int32_t state) {
   wobj.setMobRoutine(time,scheme,state);
   }
 
@@ -509,7 +535,7 @@ AiOuputPipe *World::openDlgOuput(Npc &player, Npc &npc) {
   return game.openDlgOuput(player,npc);
   }
 
-void World::aiOutputSound(Npc &player, const std::string &msg) {
+void World::aiOutputSound(Npc &player, std::string_view msg) {
   wsound.aiOutput(player.position(),msg);
   }
 
@@ -522,7 +548,7 @@ bool World::isTargeted(Npc& npc) {
   }
 
 Npc *World::addNpc(std::string_view name, std::string_view at) {
-  size_t id = script().getSymbolIndex(name);
+  size_t id = script().findSymbolIndex(name);
   if(id==size_t(-1))
     return nullptr;
   return wobj.addNpc(id,at);
@@ -540,7 +566,7 @@ Item *World::addItem(size_t itemInstance, std::string_view at) {
   return wobj.addItem(itemInstance,at);
   }
 
-Item* World::addItem(const ZenLoad::zCVobData& vob) {
+Item* World::addItem(const phoenix::vobs::item& vob) {
   return wobj.addItem(vob);
   }
 
@@ -560,7 +586,7 @@ void World::removeItem(Item& it) {
   wobj.removeItem(it);
   }
 
-size_t World::hasItems(const char* tag, size_t itemCls) {
+size_t World::hasItems(std::string_view tag, size_t itemCls) {
   return wobj.hasItems(tag,itemCls);
   }
 
@@ -663,7 +689,7 @@ Sound World::addWeaponHitEffect(Npc& src, const Bullet* srcArrow, Npc& reciver) 
     return addHitEffect("FI",armor,"MAM",pos);
   }
 
-Sound World::addLandHitEffect(ItemMaterial src, ZenLoad::MaterialGroup reciver, const Tempest::Matrix4x4& pos) {
+Sound World::addLandHitEffect(ItemMaterial src, phoenix::material_group reciver, const Tempest::Matrix4x4& pos) {
   // IHI - item hits item
   // IHL - Item hits Level
   return addHitEffect(materialTag(src),materialTag(reciver),"IHL",pos);
@@ -675,22 +701,20 @@ Sound World::addWeaponBlkEffect(ItemMaterial src, ItemMaterial reciver, const Te
   }
 
 Sound World::addHitEffect(std::string_view src, std::string_view dst, std::string_view scheme, const Tempest::Matrix4x4& pos) {
-  char buf[128]={};
-  std::snprintf(buf,sizeof(buf),"CS_%.*s_%.*s_%.*s",int(scheme.size()),scheme.data(), int(src.size()),src.data(), int(dst.size()),dst.data());
-
   Tempest::Vec3 pos3;
   pos.project(pos3);
 
-  auto ret = Sound(*this,::Sound::T_Regular,buf,pos3,2500.f,false);
+  string_frm sound("CS_",scheme,'_',src,'_',dst);
+  auto ret = Sound(*this,::Sound::T_Regular,sound,pos3,2500.f,false);
 
-  std::snprintf(buf,sizeof(buf),"CPFX_%.*s_%.*s_%.*s", int(scheme.size()),scheme.data(), int(src.size()),src.data(), int(dst.size()),dst.data());
+  string_frm buf("CPFX_",scheme,'_',src,'_',dst);
   if(Gothic::inst().loadParticleFx(buf,true)==nullptr) {
     if(dst=="ME")
-      std::snprintf(buf,sizeof(buf),"CPFX_%.*s_%s",int(scheme.size()),scheme.data(),"METAL");
+      buf = string_frm("CPFX_",scheme,"_METAL");
     else if(dst=="WO")
-      std::snprintf(buf,sizeof(buf),"CPFX_%.*s_%s",int(scheme.size()),scheme.data(),"WOOD");
+      buf = string_frm("CPFX_",scheme,"_WOOD");
     else if(dst=="ST")
-      std::snprintf(buf,sizeof(buf),"CPFX_%.*s_%s",int(scheme.size()),scheme.data(),"STONE");
+      buf = string_frm("CPFX_",scheme,"_STONE");
     else
       return ret;
     }
@@ -713,7 +737,7 @@ bool World::isInPfxRange(const Tempest::Vec3& p) const {
   }
 
 void World::addDlgSound(std::string_view s, const Tempest::Vec3& pos, float range, uint64_t& timeLen) {
-  auto sfx = wsound.addDlgSound(s,pos.x,pos.y,pos.z,range,timeLen);
+  auto sfx = wsound.addDlgSound(s,pos,range,timeLen);
   sfx.play();
   }
 
@@ -733,16 +757,15 @@ void World::addFreePoint(const Tempest::Vec3& pos, const Tempest::Vec3& dir, std
   wmatrix->addFreePoint(pos,dir,name);
   }
 
-void World::addSound(const ZenLoad::zCVobData& vob) {
-  if(vob.vobType==ZenLoad::zCVobData::VT_zCVobSound ||
-     vob.vobType==ZenLoad::zCVobData::VT_zCVobSoundDaytime) {
-    wsound.addSound(vob);
+void World::addSound(const phoenix::vob& vob) {
+  if(vob.type==phoenix::vob_type::zCVobSound || vob.type==phoenix::vob_type::zCVobSoundDaytime) {
+    wsound.addSound(reinterpret_cast<const phoenix::vobs::sound&>(vob));
     }
-  else if(vob.vobType==ZenLoad::zCVobData::VT_oCZoneMusic) {
-    wsound.addZone(vob);
+  else if(vob.type==phoenix::vob_type::oCZoneMusic) {
+    wsound.addZone(reinterpret_cast<const phoenix::vobs::zone_music&>(vob));
     }
-  else if(vob.vobType==ZenLoad::zCVobData::VT_oCZoneMusicDefault) {
-    wsound.setDefaultZone(vob);
+  else if(vob.type==phoenix::vob_type::oCZoneMusicDefault) {
+    wsound.setDefaultZone(reinterpret_cast<const phoenix::vobs::zone_music&>(vob));
     }
   }
 
@@ -750,7 +773,7 @@ void World::invalidateVobIndex() {
   wobj.invalidateVobIndex();
   }
 
-const Daedalus::GEngineClasses::C_Focus& World::searchPolicy(const Npc& pl, TargetCollect& coll, WorldObjects::SearchFlg& opt) const {
+const phoenix::c_focus& World::searchPolicy(const Npc& pl, TargetCollect& coll, WorldObjects::SearchFlg& opt) const {
   opt  = WorldObjects::NoFlg;
   coll = TARGET_COLLECT_FOCUS;
 
@@ -759,7 +782,7 @@ const Daedalus::GEngineClasses::C_Focus& World::searchPolicy(const Npc& pl, Targ
     case WeaponState::W1H:
     case WeaponState::W2H:
       opt = WorldObjects::NoDeath;
-      return game.script()->focusMele();
+      return game.script()->focusMelee();
     case WeaponState::Bow:
     case WeaponState::CBow:
       opt = WorldObjects::SearchFlg(WorldObjects::NoDeath | WorldObjects::NoUnconscious);
@@ -768,7 +791,7 @@ const Daedalus::GEngineClasses::C_Focus& World::searchPolicy(const Npc& pl, Targ
       if(auto weapon = pl.inventory().activeWeapon()) {
         int32_t id  = weapon->spellId();
         auto&   spl = script().spellDesc(id);
-        coll = TargetCollect(spl.targetCollectAlgo);
+        coll = TargetCollect(spl.target_collect_algo);
         }
       opt = WorldObjects::SearchFlg(WorldObjects::NoDeath | WorldObjects::NoUnconscious);
       return game.script()->focusMage();
@@ -788,11 +811,11 @@ const WayPoint *World::findPoint(std::string_view name, bool inexact) const {
   }
 
 const WayPoint* World::findWayPoint(const Tempest::Vec3& pos) const {
-  return wmatrix->findWayPoint(pos,pos,[](const WayPoint&){ return true; });
+  return wmatrix->findWayPoint(pos,[](const WayPoint&){ return true; });
   }
 
 const WayPoint* World::findWayPoint(const Tempest::Vec3& pos, const std::function<bool(const WayPoint&)>& f) const {
-  return wmatrix->findWayPoint(pos,pos,f);
+  return wmatrix->findWayPoint(pos,f);
   }
 
 const WayPoint *World::findFreePoint(const Npc &npc, std::string_view name) const {
@@ -825,6 +848,8 @@ const WayPoint *World::findNextFreePoint(const Npc &npc, std::string_view name) 
   auto pos = npc.position();
   pos.y+=npc.translateY();
   auto cur = npc.currentWayPoint();
+  if(cur!=nullptr && !cur->checkName(name))
+    cur = nullptr;
   auto wp  = wmatrix->findFreePoint(pos,name,[cur,&npc](const WayPoint& wp) -> bool {
     if(wp.isLocked() || &wp==cur)
       return false;
@@ -837,6 +862,10 @@ const WayPoint *World::findNextFreePoint(const Npc &npc, std::string_view name) 
 
 const WayPoint *World::findNextPoint(const WayPoint &pos) const {
   return wmatrix->findNextPoint(pos.position());
+  }
+
+const WayPoint& World::startPoint() const {
+  return wmatrix->startPoint();
   }
 
 const WayPoint& World::deadPoint() const {
@@ -857,22 +886,34 @@ void World::detectItem(const Tempest::Vec3& p, const float r, const std::functio
 
 WayPath World::wayTo(const Npc &npc, const WayPoint &end) const {
   auto p     = npc.position();
-  auto begin = npc.currentWayPoint();
-  if(begin && !begin->isFreePoint() && MoveAlgo::isClose(npc.position(),*begin)) {
-    return wmatrix->wayTo(*begin,end);
-    }
 
-  begin = wmatrix->findWayPoint(p,end.position(),[&npc](const WayPoint &wp) {
+  auto begin = npc.currentWayPoint();
+  if(begin==&end && MoveAlgo::isClose(npc.position(),end)) {
+    return WayPath();
+    }
+  if(begin && !begin->isFreePoint() && MoveAlgo::isClose(npc.position(),*begin)) {
+    return wmatrix->wayTo(&begin,1,p,end);
+    }
+  auto near = wmatrix->findWayPoint(p, [&npc](const WayPoint &wp) {
     if(!npc.canSeeNpc(wp.x,wp.y+10,wp.z,true))
       return false;
     return true;
     });
-  if(begin==nullptr)
-    return WayPath();
-  if(MoveAlgo::isClose(p,*begin) && begin==&end)
+  if(near==nullptr)
     return WayPath();
 
-  return wmatrix->wayTo(*begin,end);
+  if(MoveAlgo::isClose(p,*near) && near==&end)
+    return WayPath();
+
+  std::vector<const WayPoint*> wpoint;
+  wpoint.push_back(near);
+  for(auto& i:near->connections()) {
+    auto p = i.point->position();
+    if(npc.canSeeNpc(p.x,p.y+10,p.z,true))
+      wpoint.push_back(i.point);
+    }
+
+  return wmatrix->wayTo(wpoint.data(),wpoint.size(),p,end);
   }
 
 GameScript &World::script() const {
@@ -897,7 +938,7 @@ void World::assignRoomToGuild(std::string_view r, int32_t guildId) {
   }
 
 int32_t World::guildOfRoom(const Tempest::Vec3& pos) {
-  const std::string& tg = roomAt(pos);
+  std::string_view tg = roomAt(pos);
   if(auto room=portalAt(tg)) {
     if(room->guild==GIL_PUBLIC) //FIXME: proper portal implementation
       return room->guild;
@@ -920,7 +961,7 @@ int32_t World::guildOfRoom(std::string_view portalName) {
   for(size_t i=0;i<bsp.sectors.size();++i) {
     auto& s = bsp.sectors[i].name;
     if(s==name)
-      return bspSectors[i].guild;
+      return bsp.sectorsData[i].guild;
     }
   return GIL_NONE;
   }

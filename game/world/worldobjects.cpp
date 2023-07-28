@@ -7,16 +7,21 @@
 #include "world/objects/interactive.h"
 #include "world/objects/vob.h"
 #include "world/collisionzone.h"
+#include "world/triggers/pfxcontroller.h"
+#include "world/triggers/triggerworldstart.h"
+#include "world/triggers/abstracttrigger.h"
 #include "world.h"
 #include "utils/workers.h"
 #include "utils/dbgpainter.h"
+#include "gothic.h"
 
 #include <Tempest/Painter>
 #include <Tempest/Application>
 #include <Tempest/Log>
 
+#include <glm/gtc/type_ptr.hpp>
+
 using namespace Tempest;
-using namespace Daedalus::GameState;
 
 int32_t WorldObjects::MobStates::stateByTime(gtime t) const {
   t = t.timeInDay();
@@ -144,7 +149,7 @@ void WorldObjects::tick(uint64_t dt, uint64_t dtPlayer) {
   for(size_t i=1; i<npcArr.size(); ++i) {
     auto& a = npcArr[i-1];
     auto& b = npcArr[i-0];
-    if(a->handle()->id>b->handle()->id) {
+    if(a->handle().id>b->handle().id) {
       needSort = true;
       break;
       }
@@ -152,21 +157,24 @@ void WorldObjects::tick(uint64_t dt, uint64_t dtPlayer) {
 
   if(needSort) {
     std::sort(npcArr.begin(),npcArr.end(),[](std::unique_ptr<Npc>& a, std::unique_ptr<Npc>& b){
-      return a->handle()->id<b->handle()->id;
+      return a->handle().id<b->handle().id;
       });
     }
 
+  const bool freeCam = (Gothic::inst().camera()!=nullptr && Gothic::inst().camera()->isFree());
+  const auto pl      = owner.player();
   for(size_t i=0; i<npcArr.size(); ++i) {
     auto& npc = *npcArr[i];
-    if(npc.isPlayer())
-      npc.tick(dtPlayer); else
-      npc.tick(dt);
+    uint64_t d = (pl==&npc ? dtPlayer : dt);
+    if(freeCam && pl==&npc)
+      continue;
+    npc.tick(d);
     }
 
   for(auto& i:routines) {
     auto s = i.stateByTime(owner.time());
     if(s!=i.curState) {
-      setMobState(i.scheme.c_str(),s);
+      setMobState(i.scheme,s);
       i.curState = s;
       }
     }
@@ -192,13 +200,13 @@ void WorldObjects::tick(uint64_t dt, uint64_t dtPlayer) {
       }
     }
 
-  auto pl = owner.player();
   if(pl==nullptr)
     return;
 
   npcNear.clear();
-  const float nearDist = 3000*3000;
-  const float farDist  = 6000*6000;
+  const int   PERC_DIST_INTERMEDIAT = 1000;
+  const float nearDist              = 3000*3000;
+  const float farDist               = 6000*6000;
 
   auto plPos = pl->position();
   for(auto& i:npcArr) {
@@ -224,30 +232,45 @@ void WorldObjects::tick(uint64_t dt, uint64_t dtPlayer) {
     if(i.isPlayer() || i.isDead())
       continue;
 
+    const uint64_t percNextTime = i.percNextTime();
+    if(percNextTime<=owner.tickCount()) {
+      i.perceptionProcess(*pl);
+      }
+
     if(i.processPolicy()==Npc::AiNormal) {
       for(auto& r:passive) {
         if(r.self==&i)
           continue;
-        float l = i.qDistTo(r.pos.x,r.pos.y,r.pos.z);
+
+        const float l     = i.qDistTo(r.pos.x,r.pos.y,r.pos.z);
+        const float range = float(std::min(i.handle().senses_range,PERC_DIST_INTERMEDIAT));
+        if(l>range*range)
+          continue;
+
+        if(i.isDown() || i.isPlayer() || !i.isAiQueueEmpty())
+          continue;
+
+        if((percNextTime>owner.tickCount()) &&
+           (r.what==PERC_ASSESSFIGHTSOUND || r.what==PERC_ASSESSQUIETSOUND)) {
+          //Log::d("");
+          //continue;
+          }
+
+        if(r.other==nullptr)
+          continue;
+
+        if(i.canSenseNpc(*r.other, true)==SensesBit::SENSE_NONE)
+          continue;
+
+        // approximation of behavior of original G2
+        if(r.victum!=nullptr && i.canSenseNpc(*r.victum,true,float(r.other->handle().senses_range))==SensesBit::SENSE_NONE)
+          continue;
+
         if(r.item!=size_t(-1) && r.other!=nullptr)
           owner.script().setInstanceItem(*r.other,r.item);
-        const float range = float(i.handle()->senses_range);
-        if(l<range*range && r.other!=nullptr && r.victum!=nullptr) {
-          // aproximation of behavior of original G2
-          if(!i.isDown() && !i.isPlayer() &&
-             i.canSenseNpc(*r.other, true)!=SensesBit::SENSE_NONE &&
-             i.canSenseNpc(*r.victum,true,float(r.other->handle()->senses_range))!=SensesBit::SENSE_NONE
-            ) {
-            i.perceptionProcess(*r.other,r.victum,l,PercType(r.what));
-            }
-          }
+        i.perceptionProcess(*r.other,r.victum,l,PercType(r.what));
         }
       }
-
-    if(i.percNextTime()>owner.tickCount())
-      continue;
-
-    i.perceptionProcess(*pl);
     }
   }
 
@@ -280,7 +303,7 @@ uint32_t WorldObjects::mobsiId(const void* ptr) const {
 Npc* WorldObjects::addNpc(size_t npcInstance, std::string_view at) {
   auto pos = owner.findPoint(at);
   if(pos==nullptr)
-    Log::e("inserNpc: invalid waypoint");
+    Log::e("addNpc: invalid waypoint");
 
   Npc* npc = new Npc(owner,npcInstance,at);
   if(pos!=nullptr && pos->isLocked()){
@@ -330,22 +353,21 @@ Npc* WorldObjects::addNpc(size_t npcInstance, const Vec3& pos) {
 
 Npc* WorldObjects::insertPlayer(std::unique_ptr<Npc> &&npc, std::string_view at) {
   auto pos = owner.findPoint(at);
-  if(pos==nullptr){
-    Log::e("insertPlayer: invalid waypoint");
-    return nullptr;
+  if(pos==nullptr) {
+    Log::e("insertPlayer: invalid waypoint, using fallback");
+    // freemine.zen
+    pos = &owner.startPoint();
     }
 
-  if(pos!=nullptr && pos->isLocked()){
+  if(pos->isLocked()) {
     auto p = owner.findNextPoint(*pos);
     if(p)
       pos=p;
     }
-  if(pos!=nullptr) {
-    npc->setPosition  (pos->x,pos->y,pos->z);
-    npc->setDirection (pos->dirX,pos->dirY,pos->dirZ);
-    npc->attachToPoint(pos);
-    npc->updateTransform();
-    }
+  npc->setPosition  (pos->x,pos->y,pos->z);
+  npc->setDirection (pos->dirX,pos->dirY,pos->dirZ);
+  npc->attachToPoint(pos);
+  npc->updateTransform();
   npcArr.emplace_back(std::move(npc));
   return npcArr.back().get();
   }
@@ -377,19 +399,14 @@ void WorldObjects::tickTriggers(uint64_t /*dt*/) {
   triggerEvents.clear();
 
   for(auto& e:evt)
-    execTriggerEvent(e);
+    owner.execTriggerEvent(e);
   }
 
 void WorldObjects::triggerEvent(const TriggerEvent &e) {
   triggerEvents.push_back(e);
   }
 
-void WorldObjects::execTriggerEvent(const TriggerEvent& e) {
-  if(e.timeBarrier>owner.tickCount()) {
-    triggerEvent(std::move(e));
-    return;
-    }
-
+bool WorldObjects::execTriggerEvent(const TriggerEvent& e) {
   bool emitted=false;
   for(auto& i:triggers) {
     auto& t = *i;
@@ -398,15 +415,15 @@ void WorldObjects::execTriggerEvent(const TriggerEvent& e) {
       emitted=true;
       }
     }
-  if(!emitted)
-    Log::d("unable to process trigger: \"",e.target,"\"");
+
+  return emitted;
   }
 
 void WorldObjects::updateAnimation(uint64_t dt) {
   static bool doAnim=true;
   if(!doAnim)
     return;
-  Workers::parallelFor(npcArr,[dt](std::unique_ptr<Npc>& i){
+  Workers::parallelTasks(npcArr,[dt](std::unique_ptr<Npc>& i){
     i->updateAnimation(dt);
     });
   interactiveObj.parallelFor([dt](Interactive& i){
@@ -428,7 +445,7 @@ bool WorldObjects::isTargetedBy(Npc& npc, Npc& dst) {
     return false;
   if(npc.processPolicy()!=Npc::AiNormal || npc.weaponState()==WeaponState::NoWeapon)
     return false;
-  if(!npc.isAtack())
+  if(!npc.isAttack())
     return false;
   return true;
   }
@@ -443,7 +460,7 @@ Npc *WorldObjects::findHero() {
 
 Npc *WorldObjects::findNpcByInstance(size_t instance) {
   for(auto& i:npcArr)
-    if(i->handle()->instanceSymbol==instance)
+    if(i->handle().symbol_index()==instance)
       return i.get();
   return nullptr;
   }
@@ -479,10 +496,16 @@ void WorldObjects::addTrigger(AbstractTrigger* tg) {
   triggers.emplace_back(tg);
   }
 
-void WorldObjects::triggerOnStart(bool firstTime) {
+bool WorldObjects::triggerOnStart(bool firstTime) {
+  bool ret = false;
   TriggerEvent evt("","",firstTime ? TriggerEvent::T_StartupFirstTime : TriggerEvent::T_Startup);
-  for(auto& i:triggers)
-    i->processOnStart(evt);
+  for(auto& i:triggers) {
+    if(auto ts = dynamic_cast<TriggerWorldStart*>(i)) {
+      ts->processEvent(evt);
+      ret = true;
+      }
+    }
+  return ret;
   }
 
 void WorldObjects::enableTicks(AbstractTrigger& t) {
@@ -528,13 +551,16 @@ void WorldObjects::stopEffect(const VisualFx& vfx) {
     i->stopEffect(vfx);
   }
 
-Item* WorldObjects::addItem(const ZenLoad::zCVobData &vob) {
-  size_t inst = owner.script().getSymbolIndex(vob.oCItem.instanceName);
+Item* WorldObjects::addItem(const phoenix::vobs::item& vob) {
+  size_t inst = owner.script().findSymbolIndex(vob.instance);
   Item*  it   = addItem(inst,"");
   if(it==nullptr)
     return nullptr;
 
-  Matrix4x4 m { vob.worldMatrix.mv };
+  glm::mat4x4 worldMatrix = vob.rotation;
+  worldMatrix[3] = glm::vec4(vob.position, 1);
+
+  Matrix4x4 m { glm::value_ptr(worldMatrix) };
   it->setObjMatrix(m);
   return it;
   }
@@ -577,9 +603,10 @@ Bullet& WorldObjects::shootBullet(const Item& itmId, const Vec3& pos, const Vec3
   bullets.emplace_back(owner,itmId,pos);
   auto& b = bullets.back();
 
+  const float rgnBias = 50.f;
   const float l = dir.length();
   b.setDirection(dir*speed/l);
-  b.setTargetRange(tgRange);
+  b.setTargetRange(tgRange + rgnBias);
   return b;
   }
 
@@ -619,8 +646,8 @@ Item* WorldObjects::addItem(size_t itemInstance, const Tempest::Vec3& pos, const
   }
 
 Item* WorldObjects::addItemDyn(size_t itemInstance, const Tempest::Matrix4x4& pos, size_t ownerNpc) {
-  //size_t ItLsTorchburned  = owner.script().getSymbolIndex("ItLsTorchburned");
-  size_t ItLsTorchburning = owner.script().getSymbolIndex("ItLsTorchburning");
+  //size_t ItLsTorchburned  = owner.script().findSymbolIndex("ItLsTorchburned");
+  size_t ItLsTorchburning = owner.script().findSymbolIndex("ItLsTorchburning");
 
   if(itemInstance==size_t(-1))
     return nullptr;
@@ -631,7 +658,7 @@ Item* WorldObjects::addItemDyn(size_t itemInstance, const Tempest::Matrix4x4& po
     ptr.reset(new Item(owner,itemInstance,Item::T_WorldDyn));
 
   auto* it=ptr.get();
-  it->handle().owner = ownerNpc==size_t(-1) ? 0 : uint32_t(ownerNpc);
+  it->handle().owner = ownerNpc==size_t(-1) ? 0 : int32_t(ownerNpc);
   itemArr.emplace_back(std::move(ptr));
   items.add(itemArr.back().get());
 
@@ -648,8 +675,8 @@ void WorldObjects::addStatic(StaticObj* obj) {
   objStatic.push_back(obj);
   }
 
-void WorldObjects::addRoot(ZenLoad::zCVobData&& vob, bool startup) {
-  auto p = Vob::load(nullptr,owner,std::move(vob),(startup ? Vob::Startup : Vob::None) | Vob::Static);
+void WorldObjects::addRoot(const std::unique_ptr<phoenix::vob>& vob, bool startup) {
+  auto p = Vob::load(nullptr,owner,*vob,(startup ? Vob::Startup : Vob::None) | Vob::Static);
   if(p==nullptr)
     return;
   rootVobs.emplace_back(std::move(p));
@@ -703,7 +730,7 @@ Interactive* WorldObjects::findInteractive(const Npc &pl, Interactive* def, cons
   return ret;
   }
 
-Npc* WorldObjects::findNpc(const Npc &pl, Npc *def, const SearchOpt& opt) {
+Npc* WorldObjects::findNpcNear(const Npc& pl, Npc* def, const SearchOpt& opt) {
   def = validateNpc(def);
   if(def) {
     auto xopt  = opt;
@@ -711,8 +738,11 @@ Npc* WorldObjects::findNpc(const Npc &pl, Npc *def, const SearchOpt& opt) {
     if(def && testObj(*def,pl,xopt))
       return def;
     }
-  auto r = findObj(npcArr,pl,opt);
-  return r ? r->get() : nullptr;
+  auto r = findObj(npcNear,pl,opt);
+  if(r!=nullptr && (!Gothic::inst().doHideFocus() || !r->isDead() ||
+                       r->inventory().iterator(Inventory::T_Ransack).isValid()))
+    return r;
+  return nullptr;
   }
 
 Item *WorldObjects::findItem(const Npc &pl, Item *def, const SearchOpt& opt) {
@@ -759,7 +789,7 @@ void WorldObjects::marchInteractives(DbgPainter &p) const {
     }
   }
 
-Interactive *WorldObjects::aviableMob(const Npc &pl, const char* dest) {
+Interactive *WorldObjects::availableMob(const Npc &pl, std::string_view dest) {
   const float  dist=100*10.f;
   Interactive* ret =nullptr;
 
@@ -785,7 +815,7 @@ Interactive *WorldObjects::aviableMob(const Npc &pl, const char* dest) {
   return ret;
   }
 
-void WorldObjects::setMobRoutine(gtime time, const Daedalus::ZString& scheme, int32_t state) {
+void WorldObjects::setMobRoutine(gtime time, std::string_view scheme, int32_t state) {
   MobRoutine r;
   r.time  = time;
   r.state = state;
@@ -823,7 +853,7 @@ void WorldObjects::sendPassivePerc(Npc &self, Npc &other, Npc &victum, Item &itm
   m.self   = &self;
   m.other  = &other;
   m.victum = &victum;
-  m.item   = itm.handle().instanceSymbol;
+  m.item   = itm.handle().symbol_index();
 
   sndPerc.push_back(m);
   }
@@ -858,14 +888,14 @@ void WorldObjects::resetPositionToTA() {
   for(auto& i:interactiveObj) {
     int32_t state = -1;
     for(auto& r:routines) {
-      if(i->schemeName()==r.scheme.c_str())
+      if(i->schemeName()==r.scheme)
         state = r.curState;
       }
     i->resetPositionToTA(state);
     }
   }
 
-void WorldObjects::setMobState(const char* scheme, int32_t st) {
+void WorldObjects::setMobState(std::string_view scheme, int32_t st) {
   for(auto& i:rootVobs)
     i->setMobState(scheme,st);
   }
@@ -874,13 +904,16 @@ template<class T>
 T& deref(std::unique_ptr<T>& x){ return *x; }
 
 template<class T>
+T& deref(T* x){ return *x; }
+
+template<class T>
 T& deref(T& x){ return x; }
 
 template<class T>
 bool checkFlag(T&,WorldObjects::SearchFlg){ return true; }
 
 static bool checkFlag(Npc& n,WorldObjects::SearchFlg f){
-  if(n.handle()->noFocus)
+  if(n.handle().no_focus)
     return false;
   if(bool(f&WorldObjects::NoDeath) && n.isDead())
     return false;
@@ -898,11 +931,11 @@ static bool checkFlag(Interactive& i,WorldObjects::SearchFlg f){
 template<class T>
 bool canSee(const Npc&,const T&){ return true; }
 
-static bool canSee(const Npc& pl,const Npc& n){
+static bool canSee(const Npc& pl, const Npc& n){
   return pl.canSeeNpc(n,true);
   }
 
-static bool canSee(const Npc& pl,const Interactive& n){
+static bool canSee(const Npc& pl, const Interactive& n){
   return n.canSeeNpc(pl,true);
   }
 
@@ -911,8 +944,8 @@ static bool canSee(const Npc& pl, const Item& n){
   }
 
 template<class T>
-auto WorldObjects::findObj(T &src,const Npc &pl, const SearchOpt& opt) -> typename std::remove_reference<decltype(src[0])>::type* {
-  typename std::remove_reference<decltype(src[0])>::type* ret=nullptr;
+auto WorldObjects::findObj(T &src,const Npc &pl, const SearchOpt& opt) -> typename std::remove_reference<decltype(src[0])>::type {
+  typename std::remove_reference<decltype(src[0])>::type ret=nullptr;
   float rlen = opt.rangeMax*opt.rangeMax;
   if(owner.view()==nullptr)
     return nullptr;
@@ -924,7 +957,7 @@ auto WorldObjects::findObj(T &src,const Npc &pl, const SearchOpt& opt) -> typena
     float nlen = rlen;
     if(testObj(n,pl,opt,nlen)){
       rlen = nlen;
-      ret=&n;
+      ret = n;
       }
     }
   return ret;

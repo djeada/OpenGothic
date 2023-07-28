@@ -9,10 +9,11 @@ using namespace Tempest;
 WayPoint::WayPoint() {
   }
 
-WayPoint::WayPoint(const ZenLoad::zCWaypointData &dat)
+WayPoint::WayPoint(const phoenix::way_point &dat)
   : x(dat.position.x),y(dat.position.y),z(dat.position.z),
     dirX(dat.direction.x),dirY(dat.direction.y),dirZ(dat.direction.z),
-    name(upcaseof(dat.wpName)){
+    underWater(dat.under_water),
+    name(upcaseof(dat.name)) {
   }
 
 WayPoint::WayPoint(const Vec3& pos, std::string_view name)
@@ -28,21 +29,21 @@ bool WayPoint::isFreePoint() const {
   }
 
 bool WayPoint::checkName(std::string_view n) const {
-  const char*  src = name.c_str();
-  const size_t len = n.size();
+  auto src = std::string_view(name);
 
-  if(n.size()<=name.size())
-    if(std::memcmp(name.c_str(),n.data(),n.size())==0)
-      return true;
+  if(src.starts_with(n))
+    return true;
 
   for(size_t i=0, i0=0; ; ++i) {
-    if(src[i]=='_' || src[i]=='\0') {
+    if(src[i]=='_' || i==name.size()) {
       const size_t len2 = i-i0;
-      if(len==len2 && std::memcmp(&src[i0],n.data(),len2)==0)
+      auto sb = src.substr(i0, len2);
+      // if(sb==n)
+      if(sb.starts_with(n))
         return true;
       i0=i+1;
       }
-    if(src[i]=='\0')
+    if(i==name.size())
       break;
     }
 
@@ -68,6 +69,12 @@ void WayPoint::connect(WayPoint &w) {
   c.point = &w;
   c.len   = l;
   conn.push_back(c);
+  }
+
+bool WayPoint::hasLadderConn(const WayPoint* w) const {
+  if(w!=nullptr && w->ladder!=nullptr && w->ladder==ladder)
+    return true;
+  return false;
   }
 
 std::string WayPoint::upcaseof(std::string_view src) {

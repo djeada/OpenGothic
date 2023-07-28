@@ -9,18 +9,18 @@
 #include <Tempest/SoundEffect>
 #include <Tempest/TextCodec>
 #include <Tempest/Log>
+#include <Tempest/Color>
 
-#include <zenload/modelScriptParser.h>
-#include <zenload/zCModelMeshLib.h>
-#include <zenload/zCMorphMesh.h>
-#include <zenload/zCProgMeshProto.h>
-#include <zenload/zenParser.h>
-#include <zenload/ztex2dds.h>
+#include <phoenix/proto_mesh.hh>
+#include <phoenix/model_hierarchy.hh>
+#include <phoenix/model.hh>
+#include <phoenix/model_script.hh>
+#include <phoenix/material.hh>
+#include <phoenix/texture.hh>
+#include <phoenix/ext/dds_convert.hh>
 
 #include <fstream>
 
-#include "graphics/mesh/submesh/staticmesh.h"
-#include "graphics/mesh/submesh/animmesh.h"
 #include "graphics/mesh/submesh/pfxemittermesh.h"
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "graphics/mesh/skeleton.h"
@@ -28,13 +28,12 @@
 #include "graphics/mesh/animation.h"
 #include "graphics/mesh/attachbinder.h"
 #include "graphics/material.h"
-#include "physics/physicmeshshape.h"
-#include "dmusic/music.h"
 #include "dmusic/directmusic.h"
 #include "utils/fileext.h"
 #include "utils/gthfont.h"
 
 #include "gothic.h"
+#include "utils/string_frm.h"
 
 using namespace Tempest;
 
@@ -54,20 +53,6 @@ static void emplaceTag(char* buf, char tag){
 Resources::Resources(Tempest::Device &device)
   : dev(device) {
   inst=this;
-
-  ZenLib::Log::SetLogCallback([](ZenLib::Log::EMessageType t, const char* what) {
-    switch(t) {
-      case ZenLib::Log::EMessageType::MT_Error:
-        Log::e(what);
-        break;
-      case ZenLib::Log::EMessageType::MT_Warning:
-        Log::d(what);
-        break;
-      case ZenLib::Log::EMessageType::MT_Info:
-        Log::i(what);
-        break;
-      }
-    });
 
   static std::array<VertexFsq,6> fsqBuf =
    {{
@@ -91,7 +76,7 @@ Resources::Resources(Tempest::Device &device)
   ddsBuf.reserve(8*1024*1024);
 
   {
-  Pixmap pm(1,1,Pixmap::Format::RGBA);
+  Pixmap pm(1,1,TextureFormat::RGBA8);
   uint8_t* pix = reinterpret_cast<uint8_t*>(pm.data());
   pix[0]=255;
   pix[3]=255;
@@ -99,26 +84,29 @@ Resources::Resources(Tempest::Device &device)
   }
 
   {
-  Pixmap pm(1,1,Pixmap::Format::RGBA);
+  Pixmap pm(1,1,TextureFormat::RGBA8);
   fbZero = device.texture(pm);
   }
   }
 
-void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs) {
+void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFilter) {
   std::vector<Archive> archives;
   inst->detectVdf(archives,Gothic::inst().nestedPath({u"Data"},Dir::FT_Dir));
 
   // Remove all mod files, that are not listed in modvdfs
-  archives.erase(std::remove_if(archives.begin(), archives.end(),
-                [&modvdfs](const Archive& a){
-                  return a.isMod && modvdfs.end() == std::find_if(modvdfs.begin(), modvdfs.end(),
-                        [&a](const std::u16string& modname) {
-                          const std::u16string_view& full_path = a.name;
-                          const std::u16string_view& file_name = modname;
-                          return (0 == full_path.compare(full_path.length() - file_name.length(),
-                                                         file_name.length(), file_name));
-                          });
-                  }), archives.end());
+  if(modFilter) {
+    // NOTE: apparently in CoM there is no mods list declaration. In such case - assume all modes
+    archives.erase(std::remove_if(archives.begin(), archives.end(),
+                  [&modvdfs](const Archive& a){
+                    return a.isMod && modvdfs.end() == std::find_if(modvdfs.begin(), modvdfs.end(),
+                          [&a](const std::u16string& modname) {
+                            const std::u16string_view& full_path = a.name;
+                            const std::u16string_view& file_name = modname;
+                            return (0 == full_path.compare(full_path.length() - file_name.length(),
+                                                           file_name.length(), file_name));
+                            });
+                    }), archives.end());
+    }
 
   // addon archives first!
   std::stable_sort(archives.begin(),archives.end(),[](const Archive& a,const Archive& b){
@@ -128,9 +116,25 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs) {
            std::make_tuple(bIsMod,b.time,int(b.ord));
     });
 
-  for(auto& i:archives)
-    inst->gothicAssets.loadVDF(i.name);
-  inst->gothicAssets.finalizeLoad();
+  for(auto& i:archives) {
+    try {
+      const uint32_t UNION_VDF_VERSION = 160;
+      auto in     = phoenix::buffer::mmap(i.name);
+      auto header = phoenix::vdf_header::read(in);
+      if(header.version==UNION_VDF_VERSION) {
+        Log::e("skip compressed archive: \"", TextCodec::toUtf8(i.name), "\"");
+        continue;
+        }
+      in.rewind();
+      inst->gothicAssets.mount_disk(in, phoenix::VfsOverwriteBehavior::OLDER);
+      }
+    catch(const phoenix::vdfs_signature_error& err) {
+      Log::e("unable to load archive: \"", TextCodec::toUtf8(i.name), "\", reason: ", err.what());
+      }
+    catch(const std::exception& err) {
+      Log::e("unable to load archive: \"", TextCodec::toUtf8(i.name), "\", reason: ", err.what());
+      }
+    }
 
   //for(auto& i:gothicAssets.getKnownFiles())
   //  Log::i(i);
@@ -146,28 +150,34 @@ Resources::~Resources() {
 
 bool Resources::hasFile(std::string_view name) {
   std::lock_guard<std::recursive_mutex> g(inst->sync);
-  if(name.size()<128) {
-    char buf[128] = {};
-    std::snprintf(buf,sizeof(buf),"%.*s",int(name.size()),name.data());
-    return inst->gothicAssets.hasFile(buf);
-    }
-  return inst->gothicAssets.hasFile(std::string(name));
+  return inst->gothicAssets.find(name) != nullptr;
   }
 
 bool Resources::getFileData(std::string_view name, std::vector<uint8_t> &dat) {
   dat.clear();
-  if(name.size()<128) {
-    char buf[128] = {};
-    std::snprintf(buf,sizeof(buf),"%.*s",int(name.size()),name.data());
-    return inst->gothicAssets.getFileData(buf,dat);
-    }
-  return inst->gothicAssets.getFileData(std::string(name),dat);
+
+  const auto* entry = Resources::vdfsIndex().find(name);
+  if(entry==nullptr)
+    return false;
+
+  // TODO: This should return a buffer!
+  phoenix::buffer reader = entry->open();
+  dat.assign((uint8_t*) reader.array(), (uint8_t*) reader.array() + reader.limit());
+
+  return true;
   }
 
 std::vector<uint8_t> Resources::getFileData(std::string_view name) {
   std::vector<uint8_t> data;
   getFileData(name,data);
   return data;
+  }
+
+phoenix::buffer Resources::getFileBuffer(std::string_view name) {
+  const auto* entry = Resources::vdfsIndex().find(name);
+  if (entry == nullptr)
+    throw std::runtime_error("failed to open resource: " + std::string{name});
+  return entry->open();
   }
 
 const char* Resources::renderer() {
@@ -197,8 +207,7 @@ void Resources::detectVdf(std::vector<Archive>& ret, const std::u16string &root)
       ar.ord   = uint16_t(ret.size());
       ar.isMod = vdf.rfind(u".mod")==vdf.size()-4;
 
-      //if(ar.time>0 || ar.isMod)
-      //if(ar.isMod)
+      if(std::filesystem::file_size(ar.name)>0)
         ret.emplace_back(std::move(ar));
       return;
       }
@@ -223,7 +232,8 @@ const GthFont &Resources::font(Resources::FontType type) {
   }
 
 const GthFont &Resources::font(std::string_view fname, FontType type) {
-  std::lock_guard<std::recursive_mutex> g(inst->sync);
+  if(fname.empty())
+    return font();
   return inst->implLoadFont(fname,type);
   }
 
@@ -235,7 +245,7 @@ const Texture2d &Resources::fallbackBlack() {
   return inst->fbZero;
   }
 
-VDFS::FileIndex& Resources::vdfsIndex() {
+const phoenix::Vfs& Resources::vdfsIndex() {
   return inst->gothicAssets;
   }
 
@@ -275,33 +285,58 @@ Tempest::Texture2d* Resources::implLoadTexture(TextureCache& cache, std::string_
   if(it!=cache.end())
     return it->second.get();
 
-  if(FileExt::hasExt(name,"TGA")){
-    name.resize(name.size()+2);
+  if(FileExt::hasExt(name,"TGA")) {
+    name.resize(name.size() + 2);
     std::memcpy(&name[0]+name.size()-6,"-C.TEX",6);
-    if(hasFile(name)) {
-      if(!getFileData(name.c_str(),fBuff)) {
-        Log::e("unable to load texture \"",name,"\"");
-        return nullptr;
-        }
-      ddsBuf.clear();
-      ZenLoad::convertZTEX2DDS(fBuff,ddsBuf);
-      auto t = implLoadTexture(cache,std::string(cname),ddsBuf);
-      if(t!=nullptr) {
-        return t;
+
+    it=cache.find(name);
+    if(it!=cache.end())
+      return it->second.get();
+
+    if(const auto* entry = Resources::vdfsIndex().find(name)) {
+      auto reader = entry->open();
+      auto tex = phoenix::texture::parse(reader);
+
+      if (tex.format() == phoenix::tex_dxt1 ||
+          tex.format() == phoenix::tex_dxt2 ||
+          tex.format() == phoenix::tex_dxt3 ||
+          tex.format() == phoenix::tex_dxt4 ||
+          tex.format() == phoenix::tex_dxt5) {
+        auto dds = phoenix::texture_to_dds(tex);
+
+        auto t = implLoadTexture(cache, std::string(cname), dds);
+        if(t!=nullptr)
+          return t;
+        } else {
+        auto rgba = tex.as_rgba8(0);
+
+        try {
+          Tempest::Pixmap    pm(tex.width(), tex.height(), TextureFormat::RGBA8);
+          std::memcpy(pm.data(), rgba.data(), rgba.size());
+
+          std::unique_ptr<Texture2d> t{new Texture2d(dev.texture(pm))};
+          Texture2d* ret=t.get();
+          cache[std::move(name)] = std::move(t);
+          return ret;
+          }
+        catch (...) {
+          }
         }
       }
     }
 
-  if(getFileData(cname,fBuff))
-    return implLoadTexture(cache,std::string(cname),fBuff);
+  if(auto* entry = Resources::vdfsIndex().find(cname)) {
+    phoenix::buffer reader = entry->open();
+    return implLoadTexture(cache,std::string(cname),reader);
+    }
 
   cache[name]=nullptr;
   return nullptr;
   }
 
-Texture2d *Resources::implLoadTexture(TextureCache& cache, std::string&& name, const std::vector<uint8_t> &data) {
+Texture2d *Resources::implLoadTexture(TextureCache& cache, std::string&& name, const phoenix::buffer& data) {
   try {
-    Tempest::MemReader rd(data.data(),data.size());
+    Tempest::MemReader rd((uint8_t*)data.array(),data.limit());
     Tempest::Pixmap    pm(rd);
 
     std::unique_ptr<Texture2d> t{new Texture2d(dev.texture(pm))};
@@ -334,8 +369,14 @@ ProtoMesh* Resources::implLoadMesh(std::string_view name) {
 std::unique_ptr<ProtoMesh> Resources::implLoadMeshMain(std::string name) {
   if(FileExt::hasExt(name,"3DS")) {
     FileExt::exchangeExt(name,"3DS","MRM");
-    ZenLoad::zCProgMeshProto zmsh(name,gothicAssets);
-    if(zmsh.getNumSubmeshes()==0)
+
+    const auto* entry = Resources::vdfsIndex().find(name);
+    if(entry == nullptr)
+      return nullptr;
+    auto reader = entry->open();
+    auto zmsh = phoenix::proto_mesh::parse(reader);
+
+    if(zmsh.sub_meshes.empty())
       return nullptr;
 
     PackedMesh packed(zmsh,PackedMesh::PK_Visual);
@@ -344,12 +385,18 @@ std::unique_ptr<ProtoMesh> Resources::implLoadMeshMain(std::string name) {
 
   if(FileExt::hasExt(name,"MMS") || FileExt::hasExt(name,"MMB")) {
     FileExt::exchangeExt(name,"MMS","MMB");
-    ZenLoad::zCMorphMesh zmm(name,gothicAssets);
-    if(zmm.getMesh().getNumSubmeshes()==0)
+
+    const auto* entry = Resources::vdfsIndex().find(name);
+    if(entry == nullptr)
+      throw std::runtime_error("failed to open resource: " + name);
+
+    auto reader = entry->open();
+    auto zmm = phoenix::morph_mesh::parse(reader);
+    if(zmm.mesh.sub_meshes.empty())
       return nullptr;
 
-    PackedMesh packed(zmm.getMesh(),PackedMesh::PK_VisualMorph);
-    return std::unique_ptr<ProtoMesh>{new ProtoMesh(std::move(packed),zmm.aniList,name)};
+    PackedMesh packed(zmm.mesh,PackedMesh::PK_VisualMorph);
+    return std::unique_ptr<ProtoMesh>{new ProtoMesh(std::move(packed),zmm.animations,name)};
     }
 
   if(FileExt::hasExt(name,"MDS")) {
@@ -357,50 +404,66 @@ std::unique_ptr<ProtoMesh> Resources::implLoadMeshMain(std::string name) {
     if(anim==nullptr)
       return nullptr;
 
-    ZenLoad::zCModelMeshLib mdm, mdh;
+    std::optional<phoenix::model_mesh> mdm {};
 
-    auto mesh   = anim->defaultMesh();
-    bool hasMdm = false;
+    auto mesh   = std::string(anim->defaultMesh());
 
     FileExt::exchangeExt(mesh,nullptr,"MDM") ||
     FileExt::exchangeExt(mesh,"ASC",  "MDM");
 
     if(hasFile(mesh)) {
-      ZenLoad::ZenParser parserMdm(mesh,gothicAssets);
-      mdm.loadMDM(parserMdm);
-      hasMdm = true;
+      const auto* entry = Resources::vdfsIndex().find(mesh);
+      auto reader = entry->open();
+      mdm = phoenix::model_mesh::parse(reader);
       }
 
     if(anim->defaultMesh().empty())
       mesh = name;
     FileExt::assignExt(mesh,"MDH");
 
-    ZenLoad::ZenParser parserMdh(mesh,gothicAssets);
-    mdh.loadMDH(parserMdh);
+    const auto* entry = Resources::vdfsIndex().find(mesh);
+    if(entry==nullptr)
+      throw std::runtime_error("failed to open resource: " + mesh);
+    auto reader = entry->open();
+    auto mdh = phoenix::model_hierarchy::parse(reader);
 
     std::unique_ptr<Skeleton> sk{new Skeleton(mdh,anim,name)};
     std::unique_ptr<ProtoMesh> t;
-    if(hasMdm)
-      t.reset(new ProtoMesh(std::move(mdm),std::move(sk),name)); else
+    if(mdm)
+      t.reset(new ProtoMesh(std::move(*mdm),std::move(sk),name));
+    else
       t.reset(new ProtoMesh(std::move(mdh),std::move(sk),name));
     return t;
     }
 
-  if(FileExt::hasExt(name,"MDM") || FileExt::hasExt(name,"MDL") || FileExt::hasExt(name,"ASC")) {
+  if(FileExt::hasExt(name,"MDM") || FileExt::hasExt(name,"ASC")) {
     FileExt::exchangeExt(name,"ASC","MDM");
 
     if(!hasFile(name))
       return nullptr;
 
-    ZenLoad::zCModelMeshLib mdm;
+    const auto* entry = Resources::vdfsIndex().find(name);
+    if(entry == nullptr)
+      return nullptr;
 
-    ZenLoad::ZenParser parser(name,gothicAssets);
-    if(FileExt::hasExt(name,"MDL"))
-      mdm.loadMDL(parser); else
-      mdm.loadMDM(parser);
+    auto reader = entry->open();
+    auto mdm = phoenix::model_mesh::parse(reader);
+    std::unique_ptr<ProtoMesh> t{new ProtoMesh(std::move(mdm),nullptr,name)};
+    return t;
+    }
 
-    std::unique_ptr<Skeleton> sk{new Skeleton(mdm,nullptr,name)};
-    std::unique_ptr<ProtoMesh> t{new ProtoMesh(std::move(mdm),std::move(sk),name)};
+  if(FileExt::hasExt(name,"MDL")) {
+    if(!hasFile(name))
+      return nullptr;
+
+    const auto* entry = Resources::vdfsIndex().find(name);
+    if(entry == nullptr)
+      throw std::runtime_error("failed to open resource: " + name);
+    auto reader = entry->open();
+    auto mdm = phoenix::model::parse(reader);
+
+    std::unique_ptr<Skeleton> sk{new Skeleton(mdm.hierarchy,nullptr,name)};
+    std::unique_ptr<ProtoMesh> t{new ProtoMesh(mdm,std::move(sk),name)};
     return t;
     }
 
@@ -422,8 +485,13 @@ PfxEmitterMesh* Resources::implLoadEmiterMesh(std::string_view name) {
 
   if(FileExt::hasExt(cname,"3DS")) {
     FileExt::exchangeExt(cname,"3DS","MRM");
-    ZenLoad::zCProgMeshProto zmsh(cname,gothicAssets);
-    if(zmsh.getNumSubmeshes()==0)
+
+    const auto* entry = Resources::vdfsIndex().find(cname);
+    if (entry == nullptr) return nullptr;
+    auto reader = entry->open();
+    auto zmsh = phoenix::proto_mesh::parse(reader);
+
+    if(zmsh.sub_meshes.empty())
       return nullptr;
 
     PackedMesh packed(zmsh,PackedMesh::PK_Visual);
@@ -435,9 +503,11 @@ PfxEmitterMesh* Resources::implLoadEmiterMesh(std::string_view name) {
     if(!hasFile(name))
       return nullptr;
 
-    ZenLoad::ZenParser parser(cname,gothicAssets);
-    ZenLoad::zCModelMeshLib mdm;
-    mdm.loadMDM(parser);
+    const auto* entry = Resources::vdfsIndex().find(cname);
+    if(entry == nullptr)
+      throw std::runtime_error("failed to open resource: " + cname);
+    auto reader = entry->open();
+    auto mdm = phoenix::model_mesh::parse(reader);
 
     ret = std::unique_ptr<PfxEmitterMesh>(new PfxEmitterMesh(std::move(mdm)));
     return ret.get();
@@ -446,12 +516,12 @@ PfxEmitterMesh* Resources::implLoadEmiterMesh(std::string_view name) {
   return nullptr;
   }
 
-ProtoMesh* Resources::implDecalMesh(const ZenLoad::zCVobData& vob) {
+ProtoMesh* Resources::implDecalMesh(const phoenix::vob& vob) {
   DecalK key;
   key.mat         = Material(vob);
-  key.sX          = vob.visualChunk.zCDecal.decalDim.x;
-  key.sY          = vob.visualChunk.zCDecal.decalDim.y;
-  key.decal2Sided = vob.visualChunk.zCDecal.decal2Sided;
+  key.sX          = vob.visual_decal->dimension.x;
+  key.sY          = vob.visual_decal->dimension.y;
+  key.decal2Sided = vob.visual_decal->two_sided;
 
   if(key.mat.tex==nullptr)
     return nullptr;
@@ -460,7 +530,7 @@ ProtoMesh* Resources::implDecalMesh(const ZenLoad::zCVobData& vob) {
   if(it!=decalMeshCache.end())
     return it->second.get();
 
-  Resources::Vertex vbo[PackedMesh::MaxVert] = {
+  Resources::Vertex vbo[8] = {
     {{-1.f, -1.f, 0.f},{0,0,-1},{0,1}, 0xFFFFFFFF},
     {{ 1.f, -1.f, 0.f},{0,0,-1},{1,1}, 0xFFFFFFFF},
     {{ 1.f,  1.f, 0.f},{0,0,-1},{1,0}, 0xFFFFFFFF},
@@ -476,16 +546,11 @@ ProtoMesh* Resources::implDecalMesh(const ZenLoad::zCVobData& vob) {
     i.pos[1]*=key.sY;
     }
 
-  std::vector<Resources::Vertex> cvbo(vbo,vbo+PackedMesh::MaxVert);
+  std::vector<Resources::Vertex> cvbo(vbo,vbo+8);
   std::vector<uint32_t>          cibo;
   if(key.decal2Sided)
     cibo = { 0,1,2, 0,2,3, 4,6,5, 4,7,6 }; else
     cibo = { 0,1,2, 0,2,3 };
-
-  size_t iboSz = cibo.size();
-  cibo.resize(PackedMesh::MaxInd);
-  for(size_t i=iboSz; i<cibo.size(); ++i)
-    cibo[i] = 0;
 
   std::unique_ptr<ProtoMesh> t{new ProtoMesh(key.mat, std::move(cvbo), std::move(cibo))};
 
@@ -501,15 +566,18 @@ std::unique_ptr<Animation> Resources::implLoadAnimation(std::string name) {
   if(Gothic::inst().version().game==2)
     FileExt::exchangeExt(name,"MDS","MSB");
 
+  const auto* entry = Resources::vdfsIndex().find(name);
+  if(entry == nullptr)
+    return nullptr;
+  phoenix::buffer reader = entry->open();
+
   if(FileExt::hasExt(name,"MSB")) {
-    ZenLoad::ZenParser    zen(name,gothicAssets);
-    ZenLoad::MdsParserBin p(zen);
+    auto p = phoenix::model_script::parse(reader);
     return std::unique_ptr<Animation>{new Animation(p,name.substr(0,name.size()-4),false)};
     }
 
   if(FileExt::hasExt(name,"MDS")) {
-    ZenLoad::ZenParser    zen(name,gothicAssets);
-    ZenLoad::MdsParserTxt p(zen);
+    auto p = phoenix::model_script::parse(reader);
     return std::unique_ptr<Animation>{new Animation(p,name.substr(0,name.size()-4),true)};
     }
   return nullptr;
@@ -538,6 +606,8 @@ Tempest::Sound Resources::implLoadSoundBuffer(std::string_view name) {
   }
 
 GthFont &Resources::implLoadFont(std::string_view name, FontType type) {
+  std::lock_guard<std::recursive_mutex> g(inst->syncFont);
+
   auto cname = std::string(name);
   auto it    = gothicFnt.find(std::make_pair(cname,type));
   if(it!=gothicFnt.end())
@@ -550,19 +620,18 @@ GthFont &Resources::implLoadFont(std::string_view name, FontType type) {
     file[i] = cname[i];
     }
 
-  char tex[300]={};
-  char fnt[300]={};
+  string_frm tex, fnt;
   switch(type) {
     case FontType::Normal:
     case FontType::Disabled:
     case FontType::Yellow:
     case FontType::Red:
-      std::snprintf(tex,sizeof(tex),"%s.tga",file);
-      std::snprintf(fnt,sizeof(fnt),"%s.fnt",file);
+      tex = string_frm(file,".tga");
+      fnt = string_frm(file,".fnt");
       break;
     case FontType::Hi:
-      std::snprintf(tex,sizeof(tex),"%s_hi.tga",file);
-      std::snprintf(fnt,sizeof(fnt),"%s_hi.fnt",file);
+      tex = string_frm(file,"_hi.tga");
+      fnt = string_frm(file,"_hi.fnt");
       break;
     }
 
@@ -584,7 +653,11 @@ GthFont &Resources::implLoadFont(std::string_view name, FontType type) {
       break;
     }
 
-  auto ptr   = std::make_unique<GthFont>(fnt,tex,color,gothicAssets);
+  const auto* entry = Resources::vdfsIndex().find(fnt);
+  if(entry == nullptr)
+    throw std::runtime_error("failed to open resource: " + std::string{fnt});
+
+  auto ptr   = std::make_unique<GthFont>(entry->open(),tex,color);
   GthFont* f = ptr.get();
   gothicFnt[std::make_pair(std::move(cname),type)] = std::move(ptr);
   return *f;
@@ -593,6 +666,25 @@ GthFont &Resources::implLoadFont(std::string_view name, FontType type) {
 const Texture2d *Resources::loadTexture(std::string_view name) {
   std::lock_guard<std::recursive_mutex> g(inst->sync);
   return inst->implLoadTexture(inst->texCache,name);
+  }
+
+const Texture2d* Resources::loadTexture(Tempest::Color color) {
+  if(color==Color())
+    return nullptr;
+  std::lock_guard<std::recursive_mutex> g(inst->sync);
+  auto& cache = inst->pixCache;
+  auto it = cache.find(color);
+  if(it!=cache.end())
+    return it->second.get();
+
+  uint8_t iv[4] = { uint8_t(255.f*color.r()), uint8_t(255.f*color.g()), uint8_t(255.f*color.b()), uint8_t(255.f*color.a()) };
+  Pixmap p2(1,1,TextureFormat::RGBA8);
+  std::memcpy(p2.data(),iv,4);
+
+  auto t       = std::make_unique<Texture2d>(inst->dev.texture(p2));
+  auto ret     = t.get();
+  cache[color] = std::move(t);
+  return ret;
   }
 
 const Texture2d *Resources::loadTexture(std::string_view name, int32_t iv, int32_t ic) {
@@ -639,11 +731,10 @@ std::vector<const Texture2d*> Resources::loadTextureAnim(std::string_view name) 
       if(at>sizeof(buf))
         return ret;
       }
-   auto t = loadTexture(std::string_view(buf));
+   auto t = loadTexture(buf);
     if(t==nullptr) {
-      char buf2[128] = {};
-      std::snprintf(buf2,sizeof(buf2),"%s.TGA",buf);
-      t = loadTexture(std::string_view(buf2));
+      string_frm buf2(buf,".TGA");
+      t = loadTexture(buf2);
       if(t==nullptr)
         return ret;
       }
@@ -653,14 +744,14 @@ std::vector<const Texture2d*> Resources::loadTextureAnim(std::string_view name) 
 
 Texture2d Resources::loadTexturePm(const Pixmap &pm) {
   if(pm.isEmpty()) {
-    Pixmap p2(1,1,Pixmap::Format::R);
+    Pixmap p2(1,1,TextureFormat::R8);
     std::memset(p2.data(),0,1);
     return inst->dev.texture(p2);
     }
   return inst->dev.texture(pm);
   }
 
-Material Resources::loadMaterial(const ZenLoad::zCMaterialData& src, bool enableAlphaTest) {
+Material Resources::loadMaterial(const phoenix::material& src, bool enableAlphaTest) {
   return Material(src,enableAlphaTest);
   }
 
@@ -709,38 +800,39 @@ Dx8::PatternList Resources::loadDxMusic(std::string_view name) {
   return inst->implLoadDxMusic(name);
   }
 
-const ProtoMesh* Resources::decalMesh(const ZenLoad::zCVobData& vob) {
+const ProtoMesh* Resources::decalMesh(const phoenix::vob& vob) {
   std::lock_guard<std::recursive_mutex> g(inst->sync);
   return inst->implDecalMesh(vob);
   }
 
-ZenLoad::oCWorldData Resources::loadVobBundle(std::string_view name) {
+const Resources::VobTree* Resources::loadVobBundle(std::string_view name) {
   std::lock_guard<std::recursive_mutex> g(inst->sync);
   return inst->implLoadVobBundle(name);
   }
 
-ZenLoad::oCWorldData& Resources::implLoadVobBundle(std::string_view filename) {
+const Resources::VobTree* Resources::implLoadVobBundle(std::string_view filename) {
   auto cname = std::string(filename);
   auto i     = zenCache.find(cname);
   if(i!=zenCache.end())
-    return i->second;
+    return i->second.get();
 
-  ZenLoad::oCWorldData bundle;
+  std::vector<std::unique_ptr<phoenix::vob>> bundle;
   try {
-    ZenLoad::ZenParser parser(cname,Resources::vdfsIndex());
-    parser.readHeader();
+    const auto* entry = Resources::vdfsIndex().find(cname);
+    if(entry == nullptr)
+      throw std::runtime_error("failed to open resource: " + cname);
+    auto reader = entry->open();
+    auto wrld = phoenix::world::parse(reader, Gothic::inst().version().game==1 ? phoenix::game_version::gothic_1
+                                                                               : phoenix::game_version::gothic_2);
 
-    auto fver = ZenLoad::ZenParser::FileVersion::Gothic1;
-    if(Gothic::inst().version().game==2)
-      fver = ZenLoad::ZenParser::FileVersion::Gothic2;
-    parser.readWorld(bundle,fver);
+    bundle = std::move(wrld.world_vobs);
     }
   catch(...) {
     Log::e("unable to load Zen-file: \"",cname,"\"");
     }
 
-  auto ret = zenCache.insert(std::make_pair(filename,std::move(bundle)));
-  return ret.first->second;
+  auto ret = zenCache.insert(std::make_pair(filename,std::make_unique<VobTree>(std::move(bundle))));
+  return ret.first->second.get();
   }
 
 const AttachBinder *Resources::bindMesh(const ProtoMesh &anim, const Skeleton &s) {

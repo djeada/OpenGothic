@@ -40,7 +40,7 @@ MeshObjects::Item MeshObjects::implGet(const StaticMesh &mesh, const StaticMesh:
   return parent.get(mesh,mat,s.iboOffset,s.iboLength,staticDraw);
   }
 
-const Tempest::Texture2d *MeshObjects::solveTex(const Tempest::Texture2d *def, const std::string &format, int32_t v, int32_t c) {
+const Tempest::Texture2d *MeshObjects::solveTex(const Tempest::Texture2d *def, std::string_view format, int32_t v, int32_t c) {
   if(format.find_first_of("VC")!=std::string::npos){
     auto ntex = Resources::loadTexture(format,v,c);
     if(ntex!=nullptr)
@@ -71,7 +71,7 @@ void MeshObjects::Mesh::setFatness(float f) {
     sub[i].setFatness(f);
   }
 
-void MeshObjects::Mesh::setWind(ZenLoad::AnimMode m, float intensity) {
+void MeshObjects::Mesh::setWind(phoenix::animation_mode m, float intensity) {
   for(size_t i=0;i<subCount;++i)
     sub[i].setWind(m,intensity);
   }
@@ -170,9 +170,8 @@ MeshObjects::Mesh::Mesh(MeshObjects& owner, const ProtoMesh& mesh,
       }
     }
 
-  if(mesh.morph.size()>0) {
+  if(mesh.morph.size()>0)
     startMMAnim(mesh.morph[0].name,1,uint64_t(-1));
-    }
   }
 
 MeshObjects::Mesh &MeshObjects::Mesh::operator =(MeshObjects::Mesh &&other) {
@@ -199,10 +198,22 @@ void MeshObjects::Mesh::implSetObjMatrix(const Tempest::Matrix4x4& mt, const Tem
     sub[i].setObjMatrix(mt);
   }
 
-void MeshObjects::Node::draw(Tempest::Encoder<Tempest::CommandBuffer>& p, uint8_t fId) const {
-  it->draw(p,fId);
-  }
-
 const Bounds& MeshObjects::Node::bounds() const {
   return it->bounds();
+  }
+
+const Material& MeshObjects::Node::material() const {
+  return it->material();
+  }
+
+Tempest::Matrix4x4 MeshObjects::Node::position() const {
+  return it->position();
+  }
+
+const StaticMesh* MeshObjects::Node::mesh() const {
+  return it->mesh();
+  }
+
+std::pair<uint32_t, uint32_t> MeshObjects::Node::meshSlice() const {
+  return it->meshSlice();
   }

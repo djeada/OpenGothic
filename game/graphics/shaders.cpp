@@ -6,71 +6,56 @@
 #include "resources.h"
 
 #include "shader.h"
+#include "utils/string_frm.h"
 
 using namespace Tempest;
 
+static constexpr uint32_t defaultWg = 64;
+
 Shaders* Shaders::instance = nullptr;
 
-void Shaders::ShaderSet::load(Device &device, const char *tag, const char *format, bool hasTesselation, bool hasMeshlets) {
-  char buf[256]={};
-
-  std::snprintf(buf,sizeof(buf),format,tag,"vert");
-  auto sh = GothicShader::get(buf);
-  vs = device.shader(sh.data,sh.len);
-
-  std::snprintf(buf,sizeof(buf),format,tag,"frag");
-  sh = GothicShader::get(buf);
+void Shaders::ShaderSet::load(Device &device, std::string_view tag, bool hasTesselation, bool hasMeshlets) {
+  auto sh = GothicShader::get(string_frm(tag,'.',"frag",".sprv"));
   fs = device.shader(sh.data,sh.len);
 
+  sh = GothicShader::get(string_frm(tag,'.',"vert",".sprv"));
+  vs = device.shader(sh.data,sh.len);
+
   if(hasTesselation) {
-    std::snprintf(buf,sizeof(buf),format,tag,"tesc");
-    auto sh = GothicShader::get(buf);
+    auto sh = GothicShader::get(string_frm(tag,'.',"tesc",".sprv"));
     tc = device.shader(sh.data,sh.len);
 
-    std::snprintf(buf,sizeof(buf),format,tag,"tese");
-    sh = GothicShader::get(buf);
+    sh = GothicShader::get(string_frm(tag,'.',"tese",".sprv"));
     te = device.shader(sh.data,sh.len);
     }
 
   if(hasMeshlets) {
-    // std::snprintf(buf,sizeof(buf),format,tag,"task");
-    // sh = GothicShader::get(buf);
-    // ts = device.shader(sh.data,sh.len);
-
-    std::snprintf(buf,sizeof(buf),format,tag,"mesh");
-    sh = GothicShader::get(buf);
+    sh = GothicShader::get(string_frm(tag,'.',defaultWg,".mesh",".sprv"));
     me = device.shader(sh.data,sh.len);
+
+    sh = GothicShader::get(string_frm(tag,'.',defaultWg,".task",".sprv"));
+    ts = device.shader(sh.data,sh.len);
     }
   }
 
-void Shaders::ShaderSet::load(Device& device, const char* tag, bool hasTesselation, bool hasMeshlets) {
-  load(device,tag,"%s.%s.sprv",hasTesselation,hasMeshlets);
-  }
-
-void Shaders::MaterialTemplate::load(Device &device, const char *tag, bool hasTesselation, bool hasMeshlets) {
-  char flnd[256]={};
-  char fobj[256]={};
-  char fani[256]={};
-  char fmph[256]={};
-  char fclr[256]={};
-  if(tag==nullptr || tag[0]=='\0') {
-    std::snprintf(flnd,sizeof(fobj),"lnd");
-    std::snprintf(fobj,sizeof(fobj),"obj");
-    std::snprintf(fani,sizeof(fani),"ani");
-    std::snprintf(fmph,sizeof(fani),"mph");
-    std::snprintf(fclr,sizeof(fclr),"clr");
-    } else {
-    std::snprintf(flnd,sizeof(flnd),"lnd_%s",tag);
-    std::snprintf(fobj,sizeof(fobj),"obj_%s",tag);
-    std::snprintf(fani,sizeof(fani),"ani_%s",tag);
-    std::snprintf(fmph,sizeof(fmph),"mph_%s",tag);
-    std::snprintf(fclr,sizeof(fclr),"clr_%s",tag);
+void Shaders::MaterialTemplate::load(Device &device, std::string_view tag, bool hasTesselation, bool hasMeshlets) {
+  string_frm flnd = "lnd";
+  string_frm fobj = "obj";
+  string_frm fani = "ani";
+  string_frm fmph = "mph";
+  string_frm fpfx = "pfx";
+  if(!tag.empty()) {
+    flnd = string_frm("lnd_",tag);
+    fobj = string_frm("obj_",tag);
+    fani = string_frm("ani_",tag);
+    fmph = string_frm("mph_",tag);
+    fpfx = string_frm("pfx_",tag);
     }
-  lnd.load(device,flnd,"%s.%s.sprv",hasTesselation,hasMeshlets);
-  obj.load(device,fobj,"%s.%s.sprv",hasTesselation,hasMeshlets);
-  ani.load(device,fani,"%s.%s.sprv",hasTesselation,hasMeshlets);
-  mph.load(device,fmph,"%s.%s.sprv",hasTesselation,hasMeshlets);
-  pfx.load(device,fclr,"%s.%s.sprv",hasTesselation,false);
+  lnd.load(device,flnd,hasTesselation,hasMeshlets);
+  obj.load(device,fobj,hasTesselation,hasMeshlets);
+  ani.load(device,fani,hasTesselation,hasMeshlets);
+  mph.load(device,fmph,hasTesselation,hasMeshlets);
+  pfx.load(device,fpfx,hasTesselation,false);
   }
 
 Shaders::Shaders() {
@@ -78,12 +63,15 @@ Shaders::Shaders() {
   auto& device = Resources::device();
 
   const bool meshlets = Gothic::inst().doMeshShading();
+
   solid   .load(device,"gbuffer",   false,meshlets);
   atest   .load(device,"gbuffer_at",false,meshlets);
   ghost   .load(device,"ghost",     false,meshlets);
   emmision.load(device,"emi",       false,meshlets);
+  multiply.load(device,"mul",       false,meshlets);
 
-  water   .load(device,"water",device.properties().tesselationShader,false);
+  water    .load(device,"water",false,false);
+  waterTess.load(device,"water",device.properties().tesselationShader,false);
 
   solidF  .load(device,"",  false,meshlets);
   atestF  .load(device,"at",false,meshlets);
@@ -91,28 +79,55 @@ Shaders::Shaders() {
   shadow  .load(device,"shadow",   false,meshlets);
   shadowAt.load(device,"shadow_at",false,meshlets);
 
-  copy               = postEffect("copy");
-  ssao               = postEffect("ssao");
-  ssaoCompose        = postEffect("ssao_compose");
-  bilateralBlur      = postEffect("bilateral");
+  copyBuf = computeShader("copy.comp.sprv");
+  copy    = postEffect("copy");
 
+  stash = postEffect("stash");
+
+  ssao               = computeShader("ssao.comp.sprv");
+  ambientCompose     = ambientLightShader("ssao_compose");
+  ambientComposeSsao = ambientLightShader("ssao_compose_ssao");
+
+  shadowResolve      = postEffect("shadow_resolve", "shadow_resolve",    RenderState::ZTestMode::NoEqual);
+  shadowResolveSh    = postEffect("shadow_resolve", "shadow_resolve_sh", RenderState::ZTestMode::NoEqual);
+  if(Gothic::inst().doRayQuery() && Resources::device().properties().bindless.nonUniformIndexing)
+    shadowResolveRq = postEffect("shadow_resolve", "shadow_resolve_rq", RenderState::ZTestMode::NoEqual);
+
+  irradiance         = computeShader("irradiance.comp.sprv");
   cloudsLut          = computeShader("clouds_lut.comp.sprv");
   skyTransmittance   = postEffect("sky_transmittance");
   skyMultiScattering = postEffect("sky_multi_scattering");
   skyViewLut         = postEffect("sky_view_lut");
-  fogViewLut         = postEffect("fog_view_lut");
-  fogViewLut3D       = computeShader("fog_view_lut.comp.sprv");
+
+  fogViewLut3dLQ     = computeShader("fog_view_lut_lq.comp.sprv");
+  fogViewLut3dHQ     = computeShader("fog_view_lut_hq.comp.sprv");
   shadowDownsample   = computeShader("shadow_downsample.comp.sprv");
+  fogOcclusion       = computeShader("fog3d.comp.sprv");
 
   sky                = postEffect("sky");
   fog                = fogShader ("fog");
-  sky3d              = postEffect("sky3d");
-  fog3d              = fogShader ("fog3d");
+  fog3dLQ            = fogShader ("fog3d_lq");
+  fog3dHQ            = fogShader ("fog3d_hq");
 
-  if(Gothic::inst().doRayQuery()) {
-    ssaoRq        = postEffect("ssao",        "ssao_rq");
-    ssaoComposeRq = postEffect("ssao_compose","ssao_compose_rq");
-    }
+  underwaterT        = inWaterShader("underwater_t", false);
+  underwaterS        = inWaterShader("underwater_s", true);
+  waterReflection    = reflectionShader("water_reflection.frag.sprv",meshlets);
+  waterReflectionSSR = reflectionShader("water_reflection_ssr.frag.sprv",meshlets);
+
+  {
+  RenderState state;
+  state.setCullFaceMode (RenderState::CullMode::Front);
+  state.setBlendSource  (RenderState::BlendMode::One);
+  state.setBlendDest    (RenderState::BlendMode::SrcAlpha);
+  state.setZTestMode    (RenderState::ZTestMode::Equal);
+  state.setZWriteEnabled(false);
+
+  auto sh      = GothicShader::get("sun.vert.sprv");
+  auto vsLight = device.shader(sh.data,sh.len);
+  sh           = GothicShader::get("sun.frag.sprv");
+  auto fsLight = device.shader(sh.data,sh.len);
+  sun          = device.pipeline(Triangles, state, vsLight, fsLight);
+  }
 
   {
   RenderState state;
@@ -140,9 +155,23 @@ Shaders::Shaders() {
     }
   }
 
+  tonemapping = postEffect("tonemapping", "tonemapping", RenderState::ZTestMode::Always);
+
   if(meshlets) {
-    hiZPot = computeShader("hiZPot.comp.sprv");
-    hiZMip = computeShader("hiZMip.comp.sprv");
+    hiZPot = computeShader("hiz_pot.comp.sprv");
+    hiZMip = computeShader("hiz_mip.comp.sprv");
+    }
+
+  if(meshlets) {
+    RenderState state;
+    state.setCullFaceMode(RenderState::CullMode::Front);
+    state.setZTestMode   (RenderState::ZTestMode::Greater);
+
+    auto sh = GothicShader::get("hiz_reproject.mesh.sprv");
+    auto ms = device.shader(sh.data,sh.len);
+    sh = GothicShader::get("hiz_reproject.frag.sprv");
+    auto fs = device.shader(sh.data,sh.len);
+    hiZReproj = device.pipeline(state,Shader(),ms,fs);
     }
 
   if(meshlets) {
@@ -150,13 +179,28 @@ Shaders::Shaders() {
     state.setCullFaceMode(RenderState::CullMode::Front);
     state.setZTestMode   (RenderState::ZTestMode::Less);
 
-    auto sh = GothicShader::get("lnd_hiz.mesh.sprv");
+    auto sh = GothicShader::get(string_frm("lnd_hiz.",defaultWg,".mesh.sprv"));
     auto ms = device.shader(sh.data,sh.len);
+
+    sh      = GothicShader::get(string_frm("lnd_hiz.",defaultWg,".task.sprv"));
+    auto ts = device.shader(sh.data,sh.len);
+
     sh      = GothicShader::get("lnd_hiz.frag.sprv");
     auto fs = device.shader(sh.data,sh.len);
 
-    lndPrePass = device.pipeline(Triangles,state,ms,fs);
+    lndPrePass = device.pipeline(state,ts,ms,fs);
     }
+  {
+    RenderState state;
+    state.setCullFaceMode(RenderState::CullMode::Front);
+    state.setZTestMode   (RenderState::ZTestMode::LEqual);
+
+    auto sh = GothicShader::get("item.vert.sprv");
+    auto vs = device.shader(sh.data,sh.len);
+    sh = GothicShader::get("item.frag.sprv");
+    auto fs = device.shader(sh.data,sh.len);
+    inventory = device.pipeline(Triangles,state,vs,fs);
+  }
   }
 
 Shaders::~Shaders() {
@@ -200,7 +244,9 @@ const RenderPipeline* Shaders::materialPipeline(const Material& mat, ObjectsBuck
       shadow   = &shadowAt;
       break;
     case Material::Water:
-      forward  = &water;
+      if(mat.waveMaxAmplitude>0.f)
+        forward  = &waterTess; else
+        forward  = &water;
       break;
     case Material::Ghost:
       forward  = &ghost;
@@ -222,18 +268,17 @@ const RenderPipeline* Shaders::materialPipeline(const Material& mat, ObjectsBuck
       break;
     case Material::Multiply:
     case Material::Multiply2:
-      forward  = &solidF;
-      deffered = &solid;
+      forward = &multiply;
 
-      state.setBlendSource  (RenderState::BlendMode::SrcAlpha);
-      state.setBlendDest    (RenderState::BlendMode::One);
+      state.setBlendSource  (RenderState::BlendMode::DstColor);
+      state.setBlendDest    (RenderState::BlendMode::SrcColor);
       state.setZWriteEnabled(false);
       break;
     }
 
   static bool overdrawDbg = false;
   if(overdrawDbg &&
-     (alpha==Material::Solid || alpha==Material::AlphaTest) && t!=ObjectsBucket::LandscapeShadow && pt!=T_Shadow) {
+     (alpha==Material::Solid || alpha==Material::AlphaTest) && t!=ObjectsBucket::Landscape && t!=ObjectsBucket::LandscapeShadow && pt!=T_Shadow) {
     state.setBlendSource(RenderState::BlendMode::One);
     state.setBlendDest  (RenderState::BlendMode::One);
     state.setZWriteEnabled(false);
@@ -288,32 +333,26 @@ RenderPipeline Shaders::postEffect(std::string_view name) {
   return postEffect(name,name);
   }
 
-ComputePipeline Shaders::computeShader(std::string_view name) {
-  char buf[256] = {};
-  std::snprintf(buf,sizeof(buf),"%.*s",int(name.size()),name.data());
-
-  auto& device = Resources::device();
-  auto  sh     = GothicShader::get(buf);
-  return device.pipeline(device.shader(sh.data,sh.len));
-  }
-
-RenderPipeline Shaders::postEffect(std::string_view vsName, std::string_view fsName) {
+RenderPipeline Shaders::postEffect(std::string_view vsName, std::string_view fsName, Tempest::RenderState::ZTestMode ztest) {
   auto& device = Resources::device();
 
   RenderState stateFsq;
-  stateFsq.setCullFaceMode(RenderState::CullMode::Front);
-  stateFsq.setZTestMode   (RenderState::ZTestMode::LEqual);
+  stateFsq.setCullFaceMode (RenderState::CullMode::Front);
+  stateFsq.setZTestMode    (ztest);
   stateFsq.setZWriteEnabled(false);
 
-  char buf[256] = {};
-  std::snprintf(buf,sizeof(buf),"%.*s.vert.sprv",int(vsName.size()),vsName.data());
-  auto sh = GothicShader::get(buf);
+  auto sh = GothicShader::get(string_frm(vsName,".vert.sprv"));
   auto vs = device.shader(sh.data,sh.len);
 
-  std::snprintf(buf,sizeof(buf),"%.*s.frag.sprv",int(fsName.size()),fsName.data());
-  sh      = GothicShader::get(buf);
+  sh      = GothicShader::get(string_frm(fsName,".frag.sprv"));
   auto fs = device.shader(sh.data,sh.len);
   return device.pipeline(Triangles,stateFsq,vs,fs);
+  }
+
+ComputePipeline Shaders::computeShader(std::string_view name) {
+  auto& device = Resources::device();
+  auto  sh     = GothicShader::get(name);
+  return device.pipeline(device.shader(sh.data,sh.len));
   }
 
 RenderPipeline Shaders::fogShader(std::string_view name) {
@@ -326,21 +365,84 @@ RenderPipeline Shaders::fogShader(std::string_view name) {
   state.setBlendSource  (RenderState::BlendMode::One);
   if(!fogDbg) {
     state.setBlendDest(RenderState::BlendMode::OneMinusSrcAlpha);
-    state.setZTestMode(RenderState::ZTestMode::Greater);
     }
 
-  char buf[256] = {};
-  std::snprintf(buf,sizeof(buf),"%.*s.vert.sprv",int(name.size()),name.data());
-  auto sh = GothicShader::get(buf);
+  auto sh = GothicShader::get(string_frm(name,".vert.sprv"));
   auto vs = device.shader(sh.data,sh.len);
 
-  std::snprintf(buf,sizeof(buf),"%.*s.frag.sprv",int(name.size()),name.data());
-  sh      = GothicShader::get(buf);
+  sh      = GothicShader::get(string_frm(name,".frag.sprv"));
   auto fs = device.shader(sh.data,sh.len);
   return device.pipeline(Triangles,state,vs,fs);
   }
 
+RenderPipeline Shaders::inWaterShader(std::string_view name, bool isScattering) {
+  auto& device = Resources::device();
+
+  RenderState state;
+  state.setZWriteEnabled(false);
+  state.setCullFaceMode(RenderState::CullMode::Front);
+
+  if(isScattering) {
+    state.setBlendSource(RenderState::BlendMode::One);
+    state.setBlendDest  (RenderState::BlendMode::One);
+    } else {
+    state.setBlendSource(RenderState::BlendMode::Zero);
+    state.setBlendDest  (RenderState::BlendMode::SrcColor);
+    }
+
+  auto sh = GothicShader::get("underwater.vert.sprv");
+  auto vs = device.shader(sh.data,sh.len);
+
+  sh      = GothicShader::get(string_frm(name,".frag.sprv"));
+  auto fs = device.shader(sh.data,sh.len);
+  return device.pipeline(Triangles,state,vs,fs);
+  }
+
+RenderPipeline Shaders::reflectionShader(std::string_view name, bool hasMeshlets) {
+  auto& device = Resources::device();
+
+  RenderState state;
+  state.setCullFaceMode (RenderState::CullMode::Front);
+  state.setZTestMode    (RenderState::ZTestMode::LEqual);
+  state.setZWriteEnabled(false);
+  state.setBlendSource  (RenderState::BlendMode::One);
+  state.setBlendDest    (RenderState::BlendMode::One);
+
+  auto sh = GothicShader::get("water_reflection.vert.sprv");
+  auto vs = device.shader(sh.data,sh.len);
+  sh      = GothicShader::get(name);
+  auto fs = device.shader(sh.data,sh.len);
+
+  if(hasMeshlets) {
+    sh = GothicShader::get("water_reflection.mesh.sprv");
+    vs = device.shader(sh.data,sh.len);
+    }
+
+  return device.pipeline(Triangles, state, vs, fs);
+  }
+
+RenderPipeline Shaders::ambientLightShader(std::string_view name) {
+  auto& device = Resources::device();
+
+  RenderState state;
+  state.setCullFaceMode (RenderState::CullMode::Front);
+  state.setBlendSource  (RenderState::BlendMode::One);
+  state.setBlendDest    (RenderState::BlendMode::One);
+  state.setZTestMode    (RenderState::ZTestMode::NoEqual);
+  state.setZWriteEnabled(false);
+
+  auto sh = GothicShader::get("ssao_compose.vert.sprv");
+  auto vs = device.shader(sh.data,sh.len);
+  sh      = GothicShader::get(string_frm(name,".frag.sprv"));
+  auto fs = device.shader(sh.data,sh.len);
+
+  return device.pipeline(Triangles, state, vs, fs);
+  }
+
 RenderPipeline Shaders::pipeline(RenderState& st, const ShaderSet &sh) const {
+  if(!sh.me.isEmpty() && !sh.ts.isEmpty()) {
+    return Resources::device().pipeline(st,sh.ts,sh.me,sh.fs);
+    }
   if(!sh.me.isEmpty()) {
     return Resources::device().pipeline(st,Shader(),sh.me,sh.fs);
     }

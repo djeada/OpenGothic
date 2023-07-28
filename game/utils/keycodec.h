@@ -4,9 +4,20 @@
 #include <string>
 #include <vector>
 
+#include "utils/string_frm.h"
+#include <optional>
+
 class KeyCodec final {
   public:
     KeyCodec();
+
+    /// Up to two keyboard keys can be mapped to the same action.
+    /// This enum determines the order of the mapping within a single key.
+    enum class Mapping {
+      Primary, Secondary
+      };
+
+    static constexpr auto NumMappings = 2;
 
     enum Action : uint8_t {
       Idle,
@@ -17,6 +28,8 @@ class KeyCodec final {
       Status,
       Log,
       Map,
+      Heal,
+      Potion,
 
       LookBack,
       FirstPerson,
@@ -58,11 +71,24 @@ class KeyCodec final {
       Last
       };
 
-    static void   keysStr(std::string_view keys, char buf[], size_t bufSz);
-    Action        tr(Tempest::KeyEvent&   e) const;
-    Action        tr(Tempest::MouseEvent& e) const;
-    void          set(const char* section, const char* key, int32_t code);
-    void          setDefaultKeys(const char* preset);
+    /// Encapsulates an in-game action and a key mapping that caused it to be fired.
+    struct ActionMapping {
+      Action action;
+      Mapping mapping;
+      };
+
+    static auto   keysStr(std::string_view keys) -> string_frm<64>;
+
+    Action        tr(Tempest::KeyEvent const& e) const;    
+    Action        tr(Tempest::MouseEvent const& e) const;
+
+    /// @brief Gets a mapping out of a key event.
+    /// @param e The key event.
+    /// @return Requested mapping of an action.
+    Mapping       mapping(Tempest::KeyEvent const& e) const;
+
+    void          set(std::string_view section, std::string_view key, int32_t code);
+    void          setDefaultKeys(std::string_view preset);
 
     static int32_t     keyToCode(Tempest::Event::KeyType     t);
     static int32_t     keyToCode(Tempest::Event::MouseButton t);
@@ -85,14 +111,27 @@ class KeyCodec final {
       const char* key = "";
       int32_t     k[2]={};
       bool is(int32_t i) const { return k[0]==i || k[1]==i; }
+
+      /// @brief Determines which mapping (primary/secondary) corresponds to the given key index.
+      /// @param i The key index
+      /// @return Corresponding mapping or nullopt if key is not related.
+      auto mapping(int32_t i) const -> std::optional<Mapping> {
+        if(k[0] == i)
+          return Mapping::Primary;
+        if(k[1] == i)
+          return Mapping::Secondary;
+        return std::nullopt;
+        }
       };
 
-    Action      implTr(int32_t code) const;
+    auto        implTr(int32_t code) const -> ActionMapping;
     static int  fetch(std::string_view keys, size_t s, size_t e);
-    static bool keyToStr(int32_t k, char* buf, size_t bufSz);
-    static void keyToStr(Tempest::Event::KeyType k, char* buf, size_t bufSz);
-    static void keyToStr(Tempest::Event::MouseButton k, char* buf, size_t bufSz);
+    static auto keyToStr(int32_t k) -> string_frm<64>;
+    static auto keyToStr(Tempest::Event::KeyType k) -> string_frm<64>;
+    static auto keyToStr(Tempest::Event::MouseButton k) -> string_frm<64>;
 
+    void        setDefaultKeysG1();
+    void        setDefaultKeysG1Alt();
     void        setupSettings();
     KeyPair     setup(const char* kp);
     static auto parse(std::string_view kp) -> KeyPair;

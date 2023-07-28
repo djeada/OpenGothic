@@ -26,12 +26,24 @@ void WayPath::clear() {
   dat.clear();
   }
 
+void WayPath::reverse() {
+  for(size_t i=0; i<dat.size()/2; ++i) {
+    std::swap(dat[i], dat[dat.size()-i-1]);
+    }
+  }
+
 const WayPoint *WayPath::pop() {
   if(dat.size()==0)
     return nullptr;
   auto ret = dat[dat.size()-1];
   dat.pop_back();
   return ret;
+  }
+
+const WayPoint *WayPath::first() const {
+  if(dat.size()==0)
+    return nullptr;
+  return dat[dat.size()-1];
   }
 
 const WayPoint *WayPath::last() const {

@@ -4,13 +4,15 @@
 #include <Tempest/SoundEffect>
 #include <Tempest/Point>
 
-#include <zenload/zTypes.h>
+#include <phoenix/vobs/zone.hh>
+#include <phoenix/vobs/sound.hh>
+
 #include <mutex>
 
-#include "game/gametime.h"
 #include "gamemusic.h"
 
 class GameSession;
+class TriggerEvent;
 class World;
 class Npc;
 class Sound;
@@ -21,15 +23,17 @@ class WorldSound final {
     WorldSound(GameSession& game, World& world);
     ~WorldSound();
 
-    void    setDefaultZone(const ZenLoad::zCVobData &vob);
-    void    addZone       (const ZenLoad::zCVobData &vob);
-    void    addSound      (const ZenLoad::zCVobData &vob);
+    void    setDefaultZone(const phoenix::vobs::zone_music &vob);
+    void    addZone       (const phoenix::vobs::zone_music &vob);
+    void    addSound      (const phoenix::vobs::sound &vob);
 
-    Sound   addDlgSound(std::string_view s, float x, float y, float z, float range, uint64_t &timeLen);
+    Sound   addDlgSound(std::string_view s, const Tempest::Vec3& pos, float range, uint64_t &timeLen);
 
-    void    aiOutput(const Tempest::Vec3& pos, const std::string& outputname);
+    void    aiOutput(const Tempest::Vec3& pos, std::string_view outputname);
 
     void    tick(Npc& player);
+    bool    execTriggerEvent(const TriggerEvent& e);
+
     bool    isInListenerRange(const Tempest::Vec3& pos, float sndRgn) const;
     bool    canSeeSource(const Tempest::Vec3& npc) const;
 
@@ -44,6 +48,7 @@ class WorldSound final {
       Tempest::Vec3        pos;
       float                vol     = 1.f;
       float                occ     = 1.f;
+      float                maxDist = 0.f;
       bool                 loop    = false;
       bool                 active  = true;
       bool                 ambient = false;
@@ -60,8 +65,8 @@ class WorldSound final {
     void    initSlot(Effect& slot);
     bool    setMusic(std::string_view zone, GameMusic::Tags tags);
 
-    Sound   implAddSound(const SoundFx& s, float x, float y, float z, float rangeRef, float rangeMax);
-    Sound   implAddSound(Tempest::SoundEffect&& s, float x, float y, float z, float rangeRef, float rangeMax);
+    Sound   implAddSound(const SoundFx& s, const Tempest::Vec3& pos, float rangeMax);
+    Sound   implAddSound(Tempest::SoundEffect&& s, const Tempest::Vec3& pos, float rangeMax);
 
     GameSession&                            game;
     World&                                  owner;

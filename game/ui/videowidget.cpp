@@ -54,6 +54,10 @@ struct VideoWidget::SoundContext {
     snd = SoundEffect();
     }
 
+  void play() {
+    snd.play();
+    }
+
   void pushSamples(const std::vector<float>& s) {
     std::lock_guard<std::mutex> guard(syncSamples);
     size_t sz = samples.size();
@@ -90,8 +94,10 @@ struct VideoWidget::Context {
       }
 
     const float volume = Gothic::inst().settingsGetF("SOUND","soundVolume");
-    sndDev.setGlobalVolume(volume);
     frameTime = Application::tickCount();
+    sndDev.setGlobalVolume(volume);
+    for(size_t i=0; i<vid.audioCount(); ++i)
+      sndCtx[i]->play();
     }
 
   ~Context() {
@@ -100,7 +106,7 @@ struct VideoWidget::Context {
   void advance() {
     auto& f = vid.nextFrame();
     if(pm.w()!=f.width() || pm.h()!=f.height())
-      pm = Pixmap(f.width(),f.height(),Pixmap::Format::RGBA);
+      pm = Pixmap(f.width(),f.height(),TextureFormat::RGBA8);
 
     yuvToRgba(f,pm);
     for(size_t i=0; i<vid.audioCount(); ++i)
@@ -163,14 +169,14 @@ VideoWidget::VideoWidget() {
 VideoWidget::~VideoWidget() {
   }
 
-void VideoWidget::pushVideo(const Daedalus::ZString& filename) {
+void VideoWidget::pushVideo(std::string_view filename) {
   std::lock_guard<std::mutex> guard(syncVideo);
-  pendingVideo.push(filename);
+  pendingVideo.emplace(filename);
   hasPendingVideo.store(true);
   }
 
 bool VideoWidget::isActive() const {
-  return ctx!=nullptr;
+  return ctx!=nullptr || hasPendingVideo.load();
   }
 
 void VideoWidget::tick() {
@@ -184,7 +190,7 @@ void VideoWidget::tick() {
   if(!hasPendingVideo)
     return;
 
-  Daedalus::ZString filename;
+  std::string filename;
   {
   std::lock_guard<std::mutex> guard(syncVideo);
   if(pendingVideo.empty())
@@ -212,7 +218,7 @@ void VideoWidget::tick() {
       }
     }
   catch(...){
-    Log::e("unable to play video: \"",filename.c_str(),"\"");
+    Log::e("unable to play video: \"",filename,"\"");
     stopVideo();
     }
   }

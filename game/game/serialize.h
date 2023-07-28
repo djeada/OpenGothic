@@ -13,15 +13,15 @@
 #include <sstream>
 #include <ctime>
 
-#include <daedalus/DATFile.h>
-#include <daedalus/ZString.h>
-
 #include <miniz.h>
 
-#include <zenload/zTypes.h>
+#include <phoenix/vm.hh>
+#include <phoenix/ext/daedalus_classes.hh>
+#include <phoenix/animation.hh>
 
 #include "gametime.h"
 #include "constants.h"
+#include "utils/string_frm.h"
 
 class WayPoint;
 class Npc;
@@ -31,16 +31,10 @@ class FpLock;
 class ScriptFn;
 class SaveGameHeader;
 
-namespace Daedalus {
-namespace GEngineClasses {
-struct C_Npc;
-}
-}
-
 class Serialize {
   public:
     enum Version : uint16_t {
-      Current = 39
+      Current = 46
       };
     Serialize(Tempest::ODevice& fout);
     Serialize(Tempest::IDevice&  fin);
@@ -54,18 +48,14 @@ class Serialize {
 
     template<class ... Args>
     bool setEntry(const Args& ... args) {
-      std::stringstream s;
-      int dummy[] = {(s << args, 0)...};
-      (void)dummy;
-      return implSetEntry(s.str());
+      string_frm s(args...);
+      return implSetEntry(s);
       }
 
     template<class ... Args>
     uint32_t directorySize(const Args& ... args) {
-      std::stringstream s;
-      int dummy[] = {(s << args, 0)...};
-      (void)dummy;
-      return implDirectorySize(s.str());
+      string_frm s(args...);
+      return implDirectorySize(s);
       }
 
     void setContext(World* ctx) { this->ctx=ctx; }
@@ -77,16 +67,15 @@ class Serialize {
 
     template<class ... Arg>
     void write(const Arg& ... a){
-      int dummy[sizeof...(Arg)] = { (implWrite(a), 0)... };
-      (void)dummy;
+      (implWrite(a),... );
       }
 
     template<class ... Arg>
     void read(Arg& ... a){
-      int dummy[sizeof...(Arg)] = { (implRead(a), 0)... };
-      (void)dummy;
+      (implRead(a),... );
       }
 
+    void readNpc(phoenix::vm& vm, std::shared_ptr<phoenix::c_npc>& npc);
   private:
     Serialize();
 
@@ -114,6 +103,9 @@ class Serialize {
 
     void implWrite(float  i)    { writeBytes(&i,sizeof(i)); }
     void implRead (float& i)    { readBytes (&i,sizeof(i)); }
+
+    void implWrite(phoenix::datatype  i)    { write((uint32_t) i); }
+    void implRead (phoenix::datatype& i)    { read((uint32_t&) i); }
 
     template<class T, std::enable_if_t<!std::is_same<T,uint32_t>::value && !std::is_same<T,uint64_t>::value && std::is_same<T,size_t>::value,bool> = true>
     void implWrite(T ) = delete;
@@ -143,17 +135,14 @@ class Serialize {
     void implWrite(const Tempest::Matrix4x4& i) { writeBytes(&i,sizeof(i)); }
     void implRead (Tempest::Matrix4x4& i)       { readBytes (&i,sizeof(i)); }
 
-    void implWrite(const ZenLoad::zCModelAniSample& i) { writeBytes(&i,sizeof(i)); }
-    void implRead (ZenLoad::zCModelAniSample& i)       { readBytes (&i,sizeof(i)); }
+    void implWrite(const phoenix::animation_sample& i);
+    void implRead (phoenix::animation_sample& i);
 
     // strings
     void implWrite(const std::string&              s);
     void implRead (std::string&                    s);
 
     void implWrite(std::string_view                s);
-
-    void implWrite(const Daedalus::ZString&        s);
-    void implRead (Daedalus::ZString&              s);
 
     // vectors
     template<class T>
@@ -249,37 +238,13 @@ class Serialize {
       readBytes(s,sz*sizeof(T));
       }
 
-    // classes
-    void implWrite(const Daedalus::DataContainer<int>&               c) { implWriteDat<int>  (c); }
-    void implRead (Daedalus::DataContainer<int>&                     c) { implReadDat <int>  (c); }
-    void implWrite(const Daedalus::DataContainer<float>&             c) { implWriteDat<float>(c); }
-    void implRead (Daedalus::DataContainer<float>&                   c) { implReadDat <float>(c); }
-    void implWrite(const Daedalus::DataContainer<Daedalus::ZString>& c) { implWriteDat<Daedalus::ZString>(c); }
-    void implRead (Daedalus::DataContainer<Daedalus::ZString>&       c) { implReadDat <Daedalus::ZString>(c); }
-    template<class T>
-    void implWriteDat(const Daedalus::DataContainer<T>& s) {
-      uint32_t sz=uint32_t(s.size());
-      write(sz);
-      for(size_t i=0; i<sz; ++i)
-        write(s[i]);
-      }
-    template<class T>
-    void implReadDat(Daedalus::DataContainer<T>& s) {
-      uint32_t sz=0;
-      read(sz);
-      s.resize(sz);
-      for(size_t i=0; i<sz; ++i)
-        read(s[i]);
-      }
-
     void implWrite(const SaveGameHeader& p);
     void implRead (SaveGameHeader&       p);
 
     void implWrite(const Tempest::Pixmap& p);
     void implRead (Tempest::Pixmap&       p);
 
-    void implWrite(const Daedalus::GEngineClasses::C_Npc& h);
-    void implRead (Daedalus::GEngineClasses::C_Npc&       h);
+    void implWrite(const phoenix::c_npc& h);
 
     void implWrite(const FpLock& fp);
     void implRead (FpLock& fp);
@@ -304,8 +269,8 @@ class Serialize {
     static size_t readFunc (void *pOpaque, uint64_t file_ofs, void *pBuf, size_t n);
 
     void   closeEntry();
-    bool   implSetEntry(std::string e);
-    uint32_t implDirectorySize(std::string e);
+    bool   implSetEntry(std::string_view e);
+    uint32_t implDirectorySize(std::string_view e);
 
     uint16_t                 curVer = Version::Current;
     uint16_t                 wldVer = Version::Current;

@@ -54,7 +54,7 @@ void mulScattValues(vec3 pos, vec3 sunDir, out vec3 lumTotal, out vec3 fms) {
         vec3  rayleighScattering;
         vec3  extinction;
         float mieScattering;
-        scatteringValues(newPos, rayleighScattering, mieScattering, extinction);
+        scatteringValues(newPos, 0, rayleighScattering, mieScattering, extinction);
 
         vec3 sampleTransmittance = exp(-dt*extinction);
 
@@ -105,7 +105,7 @@ void main() {
   mulScattValues(pos, sunDir, lum, f_ms);
 
   // Equation 10 from the paper.
-  //vec3 psi = lum  / (1.0 - f_ms);
-  vec3 psi = vec3(0);
+  vec3 psi = lum  / (1.0 - f_ms);
+  //vec3 psi = vec3(0);
   outColor = vec4(psi, 1.0);
   }

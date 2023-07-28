@@ -50,11 +50,11 @@ class AnimationSolver final {
       InteractToStand,
       InteractFromStand,
 
-      Atack,
-      AtackL,
-      AtackR,
-      AtackBlock,
-      AtackFinish,
+      Attack,
+      AttackL,
+      AttackR,
+      AttackBlock,
+      AttackFinish,
       StumbleA,
       StumbleB,
       AimBow,
@@ -92,7 +92,7 @@ class AnimationSolver final {
   private:
     const Animation::Sequence*     solveFrm    (std::string_view format, WeaponState st) const;
 
-    const Animation::Sequence*     solveMag    (std::string_view format, const std::string& spell) const;
+    const Animation::Sequence*     solveMag    (std::string_view format, std::string_view spell) const;
     const Animation::Sequence*     solveDead   (std::string_view format1, std::string_view format2) const;
 
     const Animation::Sequence*     implSolveAnim(Anim a, WeaponState st, WalkBit wlk, const Pose &pose) const;

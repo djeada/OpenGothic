@@ -2,10 +2,10 @@
 
 #include <Tempest/Log>
 
+#include "utils/string_frm.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
 #include "game/serialize.h"
-#include "utils/fileext.h"
 #include "skeleton.h"
 #include "animmath.h"
 
@@ -49,7 +49,7 @@ void Pose::save(Serialize &fout) {
   uint8_t sz=uint8_t(lay.size());
   fout.write(sz);
   for(auto& i:lay) {
-    fout.write(i.seq->name,i.sAnim,i.bs);
+    fout.write(i.seq->name,i.sAnim,i.bs,i.blendOut);
     }
   fout.write(lastUpdate);
   fout.write(combo.bits);
@@ -75,6 +75,8 @@ void Pose::load(Serialize &fin, const AnimationSolver& solver) {
   lay.resize(sz);
   for(auto& i:lay) {
     fin.read(name,i.sAnim,i.bs);
+    if(fin.version()>43)
+      fin.read(i.blendOut);
     i.seq = solver.solveFrm(name);
     }
   fin.read(lastUpdate);
@@ -123,6 +125,13 @@ bool Pose::hasState(BodyState s) const {
   return false;
   }
 
+bool Pose::hasStateFlag(BodyState f) const {
+  for(auto& i:lay)
+    if((i.bs & (BS_FLAG_MASK | BS_MOD_MASK))==f)
+      return true;
+  return false;
+  }
+
 void Pose::setSkeleton(const Skeleton* sk) {
   if(skeleton==sk)
     return;
@@ -160,33 +169,36 @@ bool Pose::startAnim(const AnimationSolver& solver, const Animation::Sequence *s
       const bool hasNext   = !i.seq->next.empty();
       const bool finished  = i.seq->isFinished(tickCount,i.sAnim,combo.len()) && !hasNext && (i.seq->animCls!=Animation::Loop);
       const bool interrupt = force || i.seq->canInterrupt(tickCount,i.sAnim,combo.len());
-      if(i.seq==sq && i.comb==comb && i.bs==bs && !finished)
+      if(i.seq==sq && i.comb==comb && !finished) {
+        i.bs = bs;
         return true;
+        }
       if(!interrupt && !finished)
         return false;
       if(i.bs==BS_ITEMINTERACT) {
         stopItemStateAnim(solver,tickCount);
         return false;
         }
-      char tansition[256]={};
       const Animation::Sequence* tr=nullptr;
       if(i.seq->shortName!=nullptr && sq->shortName!=nullptr) {
-        std::snprintf(tansition,sizeof(tansition),"T_%s_2_%s",i.seq->shortName,sq->shortName);
+        string_frm tansition("T_",i.seq->shortName,"_2_",sq->shortName);
         tr = solver.solveFrm(tansition);
         }
-      if(tr==nullptr && sq->shortName!=nullptr) {
-        std::snprintf(tansition,sizeof(tansition),"T_STAND_2_%s",sq->shortName);
+      if(tr==nullptr && sq->shortName!=nullptr && i.bs==BS_STAND) {
+        string_frm tansition("T_STAND_2_",sq->shortName);
         tr = solver.solveFrm(tansition);
         }
-      if(tr==nullptr && i.seq->shortName!=nullptr && sq->isIdle()) {
-        std::snprintf(tansition,sizeof(tansition),"T_%s_2_STAND",i.seq->shortName);
+      if(tr==nullptr && i.seq->shortName!=nullptr && bs==BS_STAND) {
+        string_frm tansition("T_",i.seq->shortName,"_2_STAND");
         tr = solver.solveFrm(tansition);
+        bs = tr ? i.bs : bs;
         }
       onRemoveLayer(i);
-      i.seq   = tr ? tr : sq;
-      i.sAnim = tickCount;
-      i.comb  = comb;
-      i.bs    = bs;
+      i.blendOut = i.seq->blendOut;
+      i.seq      = tr ? tr : sq;
+      i.sAnim    = tickCount;
+      i.comb     = comb;
+      i.bs       = bs;
       onAddLayer(i);
       return true;
       }
@@ -360,6 +372,7 @@ bool Pose::updateFrame(const Animation::Sequence &s, BodyState bs,
   auto* sampleA = &d.samples[size_t(frameA*idSize)];
   auto* sampleB = &d.samples[size_t(frameB*idSize)];
 
+  const uint64_t blend = std::max(s.blendOut,s.blendIn);
   for(size_t i=0; i<idSize; ++i) {
     size_t idx = d.nodeIndex[i];
     if(idx>=numBones)
@@ -382,9 +395,9 @@ bool Pose::updateFrame(const Animation::Sequence &s, BodyState bs,
         prev      [idx] = base[idx];
         [[fallthrough]];
       case S_Valid:
-        if(now<s.blendIn) {
-          float a2 = float(now)/float(s.blendIn);
-          base[idx] = mix(base[idx],smp,a2);
+        if(now<blend) {
+          float a2 = float(now)/float(blend);
+          base[idx] = mix(prev[idx],smp,a2);
           } else {
           prev[idx] = smp;
           base[idx] = smp;
@@ -456,14 +469,12 @@ const Animation::Sequence* Pose::solveNext(const AnimationSolver &solver, const 
 
     const Animation::Sequence* ret = nullptr;
     if(itemUseSt>itemUseDestSt) {
-      char T_ID_SX_2_STAND[128]={};
-      std::snprintf(T_ID_SX_2_STAND,sizeof(T_ID_SX_2_STAND),"T_%s_S%d_2_STAND",scheme,itemUseSt);
+      string_frm T_ID_SX_2_STAND("T_",scheme,"_S",itemUseSt,"_2_STAND");
       ret = solver.solveFrm(T_ID_SX_2_STAND);
       }
 
     if(ret==nullptr) {
-      char T_ID_Sa_2_Sb[256]={};
-      std::snprintf(T_ID_Sa_2_Sb,sizeof(T_ID_Sa_2_Sb),"T_%s_S%d_2_S%d",scheme,sA,sB);
+      string_frm T_ID_Sa_2_Sb("T_",scheme,"_S",sA,"_2_S",sB);
       ret = solver.solveFrm(T_ID_Sa_2_Sb);
       }
 
@@ -539,10 +550,13 @@ void Pose::processPfx(MdlVisual& visual, World& world, uint64_t tickCount) {
   }
 
 bool Pose::processEvents(uint64_t &barrier, uint64_t now, Animation::EvCount &ev) const {
-  if(hasEvents>0) {
-    for(auto& i:lay)
-      i.seq->processEvents(barrier,i.sAnim,now,ev);
+  if(hasEvents==0) {
+    barrier=now;
+    return false;
     }
+
+  for(auto& i:lay)
+    i.seq->processEvents(barrier,i.sAnim,now,ev);
   barrier=now;
   return hasEvents>0;
   }
@@ -582,7 +596,6 @@ bool Pose::isDefWindow(uint64_t tickCount) const {
   }
 
 bool Pose::isDefence(uint64_t tickCount) const {
-  char buf[32]={};
   static const char* alt[3]={"","_A2","_A3"};
 
   for(auto& i:lay) {
@@ -590,7 +603,7 @@ bool Pose::isDefence(uint64_t tickCount) const {
       // FIXME: seems like name check is not needed
       for(int h=1;h<=2;++h) {
         for(int v=0;v<3;++v) {
-          std::snprintf(buf,sizeof(buf),"T_%dHPARADE_0%s",h,alt[v]);
+          string_frm buf("T_",h,"HPARADE_0",alt[v]);
           if(i.seq->name==buf)
             return true;
           }
@@ -601,10 +614,9 @@ bool Pose::isDefence(uint64_t tickCount) const {
   }
 
 bool Pose::isJumpBack() const {
-  char buf[32]={};
   for(auto& i:lay) {
     for(int h=1;h<=2;++h) {
-      std::snprintf(buf,sizeof(buf),"T_%dHJUMPB",h);
+      string_frm buf("T_",h,"HJUMPB");
       if(i.seq->name==buf)
         return true;
       }
@@ -650,9 +662,9 @@ bool Pose::isPrehit(uint64_t now) const {
   return false;
   }
 
-bool Pose::isAtackAnim() const {
+bool Pose::isAttackAnim() const {
   for(auto& i:lay)
-    if(i.seq->isAtackAnim())
+    if(i.seq->isAttackAnim())
       return true;
   return false;
   }
@@ -689,8 +701,16 @@ uint64_t Pose::animationTotalTime() const {
   return ret;
   }
 
+uint64_t Pose::atkTotalTime() const {
+  uint16_t comboLen = combo.len();
+  uint64_t ret=0;
+  for(auto& i:lay)
+    ret = std::max(ret,uint64_t(i.seq->atkTotalTime(comboLen)));
+  return ret;
+  }
+
 const Animation::Sequence* Pose::continueCombo(const AnimationSolver &solver, const Animation::Sequence *sq,
-                                               uint64_t tickCount) {
+                                               BodyState bs, uint64_t tickCount) {
   if(sq==nullptr)
     return nullptr;
 
@@ -706,12 +726,12 @@ const Animation::Sequence* Pose::continueCombo(const AnimationSolver &solver, co
     return nullptr;
     }
 
-  auto&    d  = *prev->seq->data;
-  uint64_t t  = tickCount-prev->sAnim;
-  size_t   id = combo.len()*2;
+  auto&    d     = *prev->seq->data;
+  uint64_t t     = tickCount-prev->sAnim;
+  size_t   id    = combo.len()*2;
 
   if(0==d.defWindow.size() || 0==d.defHitEnd.size()) {
-    if(!startAnim(solver,sq,prev->comb,prev->bs,Pose::NoHint,tickCount))
+    if(!startAnim(solver,sq,prev->comb,bs,Pose::NoHint,tickCount))
       return nullptr;
     combo = ComboState();
     return sq;
@@ -719,7 +739,7 @@ const Animation::Sequence* Pose::continueCombo(const AnimationSolver &solver, co
 
   if(sq->data->defHitEnd.size()==0) {
     // hit -> block
-    startAnim(solver,sq,prev->comb,prev->bs,Pose::Force,tickCount);
+    startAnim(solver,sq,prev->comb,bs,Pose::Force,tickCount);
     combo = ComboState();
     return sq;
     }
@@ -729,8 +749,8 @@ const Animation::Sequence* Pose::continueCombo(const AnimationSolver &solver, co
     return nullptr;
     }
 
-  if(t<d.defWindow[id+0] || d.defWindow[id+1]<=t) {
-    if(prev->seq->name==sq->name && sq->data->defHitEnd.size()>1)
+  if(!(d.defWindow[id+0]<t && t<=d.defWindow[id+1])) {
+    if(prev->seq->name==sq->name && sq->data->defHitEnd.size()>0)
       combo.setBreak();
     return nullptr;
     }
@@ -739,7 +759,7 @@ const Animation::Sequence* Pose::continueCombo(const AnimationSolver &solver, co
     return nullptr;
 
   if(prev->seq->name!=sq->name) {
-    startAnim(solver,sq,prev->comb,prev->bs,Pose::Force,tickCount);
+    startAnim(solver,sq,prev->comb,bs,Pose::Force,tickCount);
     combo = ComboState();
     return sq;
     }
@@ -752,6 +772,21 @@ const Animation::Sequence* Pose::continueCombo(const AnimationSolver &solver, co
 
 uint16_t Pose::comboLength() const {
   return combo.len();
+  }
+
+const Tempest::Matrix4x4 Pose::rootNode() const {
+  size_t id = 0;
+  if(skeleton->rootNodes.size())
+    id = skeleton->rootNodes[0];
+  auto& nodes = skeleton->nodes;
+  return hasSamples[id] ? mkMatrix(base[id]) : nodes[id].tr;
+  }
+
+const Matrix4x4 Pose::rootBone() const {
+  size_t id = 0;
+  if(skeleton->rootNodes.size())
+    id = skeleton->rootNodes[0];
+  return tr[id];
   }
 
 const Tempest::Matrix4x4& Pose::bone(size_t id) const {
@@ -807,16 +842,15 @@ void Pose::setAnimRotate(const AnimationSolver &solver, Npc &npc, WeaponState fi
     }
   }
 
-bool Pose::setAnimItem(const AnimationSolver &solver, Npc &npc, std::string_view scheme, int state) {
-  char T_ID_STAND_2_S0[128]={};
-  std::snprintf(T_ID_STAND_2_S0,sizeof(T_ID_STAND_2_S0),"T_%.*s_STAND_2_S0",int(scheme.size()),scheme.data());
+const Animation::Sequence* Pose::setAnimItem(const AnimationSolver &solver, Npc &npc, std::string_view scheme, int state) {
+  string_frm T_ID_STAND_2_S0("T_",scheme,"_STAND_2_S0");
   const Animation::Sequence *sq = solver.solveFrm(T_ID_STAND_2_S0);
   if(startAnim(solver,sq,0,BS_ITEMINTERACT,Pose::NoHint,npc.world().tickCount())) {
     itemUseSt     = 0;
     itemUseDestSt = state;
-    return true;
+    return sq;
     }
-  return false;
+  return nullptr;
   }
 
 bool Pose::stopItemStateAnim(const AnimationSolver& solver, uint64_t tickCount) {
@@ -844,13 +878,10 @@ Vec3 Pose::mkBaseTranslation() {
   if(numBones==0)
     return Vec3();
 
-  size_t id=0;
-  if(skeleton->rootNodes.size())
-    id = skeleton->rootNodes[0];
-  auto& nodes = skeleton->nodes;
-  auto  b0    = hasSamples[id] ? mkMatrix(base[id]) : nodes[id].tr;
+  auto  b0 = rootNode();
 
   float dx = b0.at(3,0);
+  //float dy = b0.at(3,1) - translateY();
   float dy = 0;
   float dz = b0.at(3,2);
 

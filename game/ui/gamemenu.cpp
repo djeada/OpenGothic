@@ -5,6 +5,7 @@
 #include <Tempest/TextCodec>
 #include <Tempest/Dialog>
 
+#include "utils/string_frm.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
 #include "ui/menuroot.h"
@@ -77,7 +78,7 @@ struct GameMenu::ListViewDialog : Dialog {
     setFocusPolicy(ClickFocus);
     setCursorShape(CursorShape::Hidden);
     setFocus(true);
-    status = toStatus(list.handle.userString[0]);
+    status = toStatus(list.handle->user_string[0]);
     }
 
   void mouseDownEvent(MouseEvent& e) override {
@@ -104,11 +105,11 @@ struct GameMenu::ListViewDialog : Dialog {
         if(i+1<ql->entry.size())
           text+="\n---\n";
         }
-      next->scroll         = 0;
-      next->handle.text[0] = text.c_str();
+      next->scroll          = 0;
+      next->handle->text[0] = text;
       }
 
-    for(uint32_t i=0;i<Daedalus::GEngineClasses::MenuConstants::MAX_ITEMS;++i)
+    for(uint32_t i=0;i<phoenix::c_menu::item_count;++i)
       if(&owner.hItems[i]==next) {
         owner.curItem = i;
         break;
@@ -210,7 +211,7 @@ struct GameMenu::KeyEditDialog : Dialog {
   };
 
 struct GameMenu::SavNameDialog : Dialog {
-  SavNameDialog(Daedalus::ZString& text):text(text), text0(text) {
+  SavNameDialog(std::string& text):text(text), text0(text) {
     setFocusPolicy(ClickFocus);
     setCursorShape(CursorShape::Hidden);
     setFocus(true);
@@ -224,6 +225,8 @@ struct GameMenu::SavNameDialog : Dialog {
 
   void keyDownEvent(KeyEvent &e) override { e.accept(); }
   void keyUpEvent  (KeyEvent &e) override {
+    update();
+
     if(e.key==Event::K_ESCAPE) {
       text = text0;
       close();
@@ -235,9 +238,7 @@ struct GameMenu::SavNameDialog : Dialog {
       return;
       }
     if(e.key==Event::K_Back && text.size()>0) {
-      std::string tmp = text.c_str();
-      tmp.pop_back();
-      text = std::move(tmp);
+      text.pop_back();
       return;
       }
 
@@ -253,13 +254,13 @@ struct GameMenu::SavNameDialog : Dialog {
   void paintEvent (PaintEvent&) override {}
   void paintShadow(PaintEvent&) override {}
 
-  Daedalus::ZString& text;
-  Daedalus::ZString  text0;
+  std::string& text;
+  std::string  text0;
 
-  bool                accepted = false;
+  bool         accepted = false;
   };
 
-GameMenu::GameMenu(MenuRoot &owner, KeyCodec& keyCodec, Daedalus::DaedalusVM &vm, const char* menuSection, KeyCodec::Action kClose)
+GameMenu::GameMenu(MenuRoot &owner, KeyCodec& keyCodec, phoenix::vm &vm, std::string_view menuSection, KeyCodec::Action kClose)
   :owner(owner), keyCodec(keyCodec), vm(vm), kClose(kClose) {
   setCursorShape(CursorShape::Hidden);
   timer.timeout.bind(this,&GameMenu::onTick);
@@ -267,27 +268,31 @@ GameMenu::GameMenu(MenuRoot &owner, KeyCodec& keyCodec, Daedalus::DaedalusVM &vm
 
   textBuf.reserve(64);
 
-  Daedalus::DATFile& dat=vm.getDATFile();
-  vm.initializeInstance(menu,
-                        dat.getSymbolIndexByName(menuSection),
-                        Daedalus::IC_Menu);
-  back = Resources::loadTexture(menu.backPic.c_str());
+  auto* menuSectionSymbol = vm.find_symbol_by_name(menuSection);
+  if (menuSectionSymbol != nullptr) {
+    menu = vm.init_instance<phoenix::c_menu>(menuSectionSymbol);
+    } else {
+    Tempest::Log::e("Cannot initialize menu ", menuSection, ": Symbol not found.");
+    menu = std::make_shared<phoenix::c_menu>();
+    }
+
+  back = Resources::loadTexture(menu->back_pic);
 
   initItems();
   float infoX = 1000.0f/scriptDiv;
   float infoY = 7500.0f/scriptDiv;
 
   // There could be script-defined values
-  if(dat.hasSymbolName("MENU_INFO_X") && dat.hasSymbolName("MENU_INFO_X")) {
-    Daedalus::PARSymbol& symX = dat.getSymbolByName("MENU_INFO_X");
-    Daedalus::PARSymbol& symY = dat.getSymbolByName("MENU_INFO_Y");
+  if(vm.find_symbol_by_name("MENU_INFO_X") != nullptr && vm.find_symbol_by_name("MENU_INFO_X") != nullptr) {
+    auto* symX = vm.find_symbol_by_name("MENU_INFO_X");
+    auto* symY = vm.find_symbol_by_name("MENU_INFO_Y");
 
-    infoX = float(symX.getInt())/scriptDiv;
-    infoY = float(symY.getInt())/scriptDiv;
+    infoX = float(symX->get_int())/scriptDiv;
+    infoY = float(symY->get_int())/scriptDiv;
     }
   setPosition(int(infoX*float(w())),int(infoY*float(h())));
 
-  setSelection(isInGameAndAlive() ? menu.defaultInGame : menu.defaultOutGame);
+  setSelection(Gothic::inst().isInGameAndAlive() ? menu->default_ingame : menu->default_outgame);
   updateValues();
   slider = Resources::loadTexture("MENU_SLIDER_POS.TGA");
 
@@ -298,16 +303,12 @@ GameMenu::GameMenu(MenuRoot &owner, KeyCodec& keyCodec, Daedalus::DaedalusVM &vm
   }
 
 GameMenu::~GameMenu() {
-  for(int i=0;i<Daedalus::GEngineClasses::MenuConstants::MAX_ITEMS;++i)
-    vm.clearReferences(hItems[i].handle);
-  vm.clearReferences(menu);
-
   Gothic::flushSettings();
   Gothic::inst().popPause();
   Resources::device().waitIdle(); // safe-delete savethumb
   }
 
-GameMenu::QuestStat GameMenu::toStatus(const Daedalus::ZString& str) {
+GameMenu::QuestStat GameMenu::toStatus(std::string_view str) {
   if(str=="CURRENTMISSIONS")
     return QuestStat::Current;
   if(str=="OLDMISSIONS")
@@ -336,16 +337,23 @@ int32_t GameMenu::numQuests(const QuestLog* ql, QuestStat st) {
   }
 
 void GameMenu::initItems() {
-  for(int i=0;i<Daedalus::GEngineClasses::MenuConstants::MAX_ITEMS;++i){
-    if(menu.items[i].empty())
+  for(int i=0;i<phoenix::c_menu::item_count;++i){
+    if(menu->items[i].empty())
       continue;
 
-    hItems[i].name = menu.items[i].c_str();
-    vm.initializeInstance(hItems[i].handle,
-                          vm.getDATFile().getSymbolIndexByName(hItems[i].name.c_str()),
-                          Daedalus::IC_MenuItem);
-    hItems[i].img = Resources::loadTexture(hItems[i].handle.backPic.c_str());
-    if(hItems[i].handle.type==MENU_ITEM_LISTBOX) {
+    hItems[i].name = menu->items[i];
+
+    auto* menuItemSymbol = vm.find_symbol_by_name(hItems[i].name);
+    if (menuItemSymbol != nullptr) {
+      hItems[i].handle = vm.init_instance<phoenix::c_menu_item>(menuItemSymbol);
+      } else {
+      Tempest::Log::e("Cannot initialize menu item ", hItems[i].name, ": Symbol not found.");
+      hItems[i].handle = std::make_shared<phoenix::c_menu_item>();
+      }
+
+    hItems[i].img = Resources::loadTexture(hItems[i].handle->backpic);
+
+    if(hItems[i].handle->type==phoenix::c_menu_item_type::listbox) {
       hItems[i].visible = false;
       }
     updateItem(hItems[i]);
@@ -364,12 +372,12 @@ void GameMenu::paintEvent(PaintEvent &e) {
   for(auto& hItem:hItems)
     drawItem(p,hItem);
 
-  if(menu.flags & Daedalus::GEngineClasses::C_Menu::MENU_SHOW_INFO) {
+  if(menu->flags & phoenix::c_menu_flags::show_info) {
     if(auto sel=selectedItem()) {
-      auto&                                  fnt  = Resources::font();
-      Daedalus::GEngineClasses::C_Menu_Item& item = sel->handle;
-      if(item.text->size()>0) {
-        const char* txt = item.text[1].c_str();
+      auto& fnt  = Resources::font();
+      auto& item = sel->handle;
+      if(item->text->size()>0) {
+        std::string_view txt = item->text[1];
         int tw = fnt.textSize(txt).w;
         fnt.drawText(p,(w()-tw)/2,h()-7,txt);
         }
@@ -383,19 +391,22 @@ void GameMenu::paintEvent(PaintEvent &e) {
   }
 
 void GameMenu::drawItem(Painter& p, Item& hItem) {
-  if(!hItem.visible)
+  if(!hItem.visible || hItem.name.empty())
     return;
-  Daedalus::GEngineClasses::C_Menu_Item&        item  = hItem.handle;
-  Daedalus::GEngineClasses::C_Menu_Item::EFlags flags = Daedalus::GEngineClasses::C_Menu_Item::EFlags(item.flags);
+  if(isHidden(hItem.handle))
+    return;
+
+  auto& item  = hItem.handle;
+  auto flags = item->flags;
   getText(hItem,textBuf);
 
-  const int32_t dimx = (item.dimx!=-1) ? item.dimx : 8192;
-  const int32_t dimy = (item.dimy!=-1) ? item.dimy : 750;
+  const int32_t dimx = (item->dim_x!=-1) ? item->dim_x : 8192;
+  const int32_t dimy = (item->dim_y!=-1) ? item->dim_y : 750;
 
-  const int x   = int(float(w()*item.posx)/scriptDiv);
-  const int y   = int(float(h()*item.posy)/scriptDiv);
-  int       szX = int(float(w()*dimx     )/scriptDiv);
-  int       szY = int(float(h()*dimy     )/scriptDiv);
+  const int x   = int(float(w()*item->pos_x)/scriptDiv);
+  const int y   = int(float(h()*item->pos_y)/scriptDiv);
+  int       szX = int(float(w()*dimx       )/scriptDiv);
+  int       szY = int(float(h()*dimy       )/scriptDiv);
 
   if(hItem.img && !hItem.img->isEmpty()) {
     p.setBrush(*hItem.img);
@@ -409,7 +420,7 @@ void GameMenu::drawItem(Painter& p, Item& hItem) {
   int th = szY;
 
   AlignFlag txtAlign=NoAlign;
-  if(flags & Daedalus::GEngineClasses::C_Menu_Item::IT_TXT_CENTER) {
+  if(flags & phoenix::c_menu_item_flags::centered) {
     txtAlign = AlignHCenter | AlignVCenter;
     }
 
@@ -417,14 +428,14 @@ void GameMenu::drawItem(Painter& p, Item& hItem) {
   //p.drawRect(x,y,szX,szY);
   {
   int padd = 0;
-  if((flags & Daedalus::GEngineClasses::C_Menu_Item::IT_MULTILINE) &&
+  if((flags & phoenix::c_menu_item_flags::multiline) &&
      std::min(tw,th)>100*2+fnt.pixelSize()) {
     padd = 100; // TODO: find out exact padding formula
     }
   auto tRect   = Rect(x+padd,y+fnt.pixelSize()+padd,
                       tw-2*padd, th-2*padd);
 
-  if(flags & Daedalus::GEngineClasses::C_Menu_Item::IT_MULTILINE) {
+  if(flags & phoenix::c_menu_item_flags::multiline) {
     int lineCnt     = fnt.lineCount(tRect.w,textBuf.data());
     int linesInView = tRect.h/fnt.pixelSize();
 
@@ -448,35 +459,33 @@ void GameMenu::drawItem(Painter& p, Item& hItem) {
                textBuf.data(), txtAlign, hItem.scroll);
   }
 
-  if(item.type==MENU_ITEM_SLIDER && slider!=nullptr) {
+  if(item->type==phoenix::c_menu_item_type::slider && slider!=nullptr) {
     drawSlider(p,hItem,x,y,szX,szY);
     }
-  else if(item.type==MENU_ITEM_LISTBOX) {
+  else if(item->type==phoenix::c_menu_item_type::listbox) {
     if(auto ql = Gothic::inst().questLog()) {
-      const int px = int(float(w()*item.frameSizeX)/scriptDiv);
-      const int py = int(float(h()*item.frameSizeY)/scriptDiv);
+      const int px = int(float(w()*item->frame_sizex)/scriptDiv);
+      const int py = int(float(h()*item->frame_sizey)/scriptDiv);
 
-      auto st = toStatus(item.userString[0]);
+      auto st = toStatus(item->user_string[0]);
       drawQuestList(p, hItem, x+px,y+py, szX-2*px,szY-2*py, *ql,st);
       }
     }
-  else if(item.type==MENU_ITEM_INPUT) {
-    using namespace Daedalus::GEngineClasses::MenuConstants;
-    char textBuf[256]={};
-
-    if(item.onChgSetOptionSection=="KEYS") {
-      auto keys = Gothic::settingsGetS(item.onChgSetOptionSection.c_str(), item.onChgSetOption.c_str());
-      if(&hItem==ctrlInput)
-        std::snprintf(textBuf,sizeof(textBuf),"_"); else
-        KeyCodec::keysStr(keys,textBuf,sizeof(textBuf));
+  else if(item->type==phoenix::c_menu_item_type::input) {
+    string_frm textBuf;
+    if(item->on_chg_set_option_section=="KEYS") {
+      auto keys = Gothic::settingsGetS(item->on_chg_set_option_section, item->on_chg_set_option);
+      if(&hItem!=ctrlInput)
+        textBuf = KeyCodec::keysStr(keys); else
+        textBuf = "_";
       }
     else {
-      auto str = item.text[0].c_str();
-      if(str[0]=='\0' && &hItem!=ctrlInput && saveSlotId(hItem)!=size_t(-1))
+      auto str = string_frm(item->text[0]);
+      if(str.empty() && &hItem!=ctrlInput && saveSlotId(hItem)!=size_t(-1))
         str = "---";
-      if(&hItem==ctrlInput)
-        std::snprintf(textBuf,sizeof(textBuf),"%s_",str); else
-        std::snprintf(textBuf,sizeof(textBuf),"%s", str);
+      if(&hItem!=ctrlInput)
+        textBuf = std::string_view(str); else
+        textBuf = string_frm(str,"_");
       }
 
     fnt.drawText(p,
@@ -493,12 +502,12 @@ void GameMenu::drawSlider(Painter& p, Item& it, int x, int y, int sw, int sh) {
   int h = int(float(slider->h())*k);
   p.setBrush(*slider);
 
-  auto& sec = it.handle.onChgSetOptionSection;
-  auto& opt = it.handle.onChgSetOption;
+  auto& sec = it.handle->on_chg_set_option_section;
+  auto& opt = it.handle->on_chg_set_option;
   if(sec.empty() || opt.empty())
     return;
 
-  float v  = Gothic::settingsGetF(sec.c_str(),opt.c_str());
+  float v  = Gothic::settingsGetF(sec, opt);
   int   dx = int(float(sw-w)*std::max(0.f,std::min(v,1.f)));
   p.drawRect(x+dx,y+(sh-h)/2,w,h,
              0,0,p.brush().w(),p.brush().h());
@@ -524,7 +533,7 @@ void GameMenu::drawQuestList(Painter& p, Item& it, int x, int y, int w, int h,
     if(listId==it.value && selectedItem()==&it)
       ft = Resources::FontType::Hi;
 
-    auto& fnt = Resources::font(it.handle.fontName.c_str(),ft);
+    auto& fnt = Resources::font(it.handle->fontname,ft);
     auto  sz  = fnt.textSize(w,quest.name);
     if(itY+sz.h>h+y) {
       listEnd = listId;
@@ -590,38 +599,38 @@ void GameMenu::onTick() {
   const float wx = float(owner.w());
   const float wy = float(owner.h());
 
-  if(menu.flags & Daedalus::GEngineClasses::C_Menu::MENU_DONTSCALE_DIM)
-    resize(int(float(menu.dimx)/scriptDiv*fx),int(float(menu.dimy)/scriptDiv*fy)); else
-    resize(int(float(menu.dimx)/scriptDiv*wx),int(float(menu.dimy)/scriptDiv*wy));
+  if(menu->flags & phoenix::c_menu_flags::dont_scale_dimension)
+    resize(int(float(menu->dim_x)/scriptDiv*fx),int(float(menu->dim_y)/scriptDiv*fy)); else
+    resize(int(float(menu->dim_x)/scriptDiv*wx),int(float(menu->dim_y)/scriptDiv*wy));
 
-  if(menu.flags & Daedalus::GEngineClasses::C_Menu::MENU_ALIGN_CENTER) {
+  if(menu->flags & phoenix::c_menu_flags::align_center) {
     setPosition((owner.w()-w())/2, (owner.h()-h())/2);
     } else {
-    setPosition(int(float(menu.posx)/scriptDiv*fx), int(float(menu.posy)/scriptDiv*fy));
+    setPosition(int(float(menu->pos_x)/scriptDiv*fx), int(float(menu->pos_y)/scriptDiv*fy));
     }
   }
 
 void GameMenu::processMusicTheme() {
-  if(auto theme = Gothic::musicDef()[menu.musicTheme.c_str()])
+  if(auto theme = Gothic::musicDef()[menu->music_theme])
     GameMusic::inst().setMusic(*theme,GameMusic::mkTags(GameMusic::Std,GameMusic::Day));
   }
 
 GameMenu::Item *GameMenu::selectedItem() {
-  if(curItem<Daedalus::GEngineClasses::MenuConstants::MAX_ITEMS)
+  if(curItem<phoenix::c_menu::item_count)
     return &hItems[curItem];
   return nullptr;
   }
 
 GameMenu::Item* GameMenu::selectedNextItem(Item *it) {
   uint32_t cur=curItem+1;
-  for(uint32_t i=0;i<Daedalus::GEngineClasses::MenuConstants::MAX_ITEMS;++i)
+  for(uint32_t i=0;i<phoenix::c_menu::item_count;++i)
     if(&hItems[i]==it) {
       cur=i+1;
       break;
       }
 
-  for(int i=0;i<Daedalus::GEngineClasses::MenuConstants::MAX_ITEMS;++i,cur++) {
-    cur%=Daedalus::GEngineClasses::MenuConstants::MAX_ITEMS;
+  for(int i=0;i<phoenix::c_menu::item_count;++i,cur++) {
+    cur%=phoenix::c_menu::item_count;
 
     auto& it=hItems[cur].handle;
     if(isEnabled(it))
@@ -632,17 +641,17 @@ GameMenu::Item* GameMenu::selectedNextItem(Item *it) {
 
 GameMenu::Item* GameMenu::selectedContentItem(Item *it) {
   uint32_t cur=curItem+1;
-  for(uint32_t i=0;i<Daedalus::GEngineClasses::MenuConstants::MAX_ITEMS;++i)
+  for(uint32_t i=0;i<phoenix::c_menu::item_count;++i)
     if(&hItems[i]==it) {
       cur=i+1;
       break;
       }
 
-  for(int i=0;i<Daedalus::GEngineClasses::MenuConstants::MAX_ITEMS;++i,cur++) {
-    cur%=Daedalus::GEngineClasses::MenuConstants::MAX_ITEMS;
+  for(int i=0;i<phoenix::c_menu::item_count;++i,cur++) {
+    cur%=phoenix::c_menu::item_count;
 
     auto& it=hItems[cur].handle;
-    if(isEnabled(it) && it.type==MENU_ITEM_TEXT)
+    if(isEnabled(it) && it->type==phoenix::c_menu_item_type::text)
       return &hItems[cur];
     }
   return nullptr;
@@ -650,15 +659,15 @@ GameMenu::Item* GameMenu::selectedContentItem(Item *it) {
 
 void GameMenu::setSelection(int desired, int seek) {
   uint32_t cur=uint32_t(desired);
-  for(int i=0; i<Daedalus::GEngineClasses::MenuConstants::MAX_ITEMS; ++i,cur+=uint32_t(seek)) {
-    cur%=Daedalus::GEngineClasses::MenuConstants::MAX_ITEMS;
+  for(int i=0; i<phoenix::c_menu::item_count; ++i,cur+=uint32_t(seek)) {
+    cur%=phoenix::c_menu::item_count;
 
     auto& it=hItems[cur].handle;
     if(isSelectable(it) && isEnabled(it)){
       curItem=cur;
-      for(size_t i=0;i<Daedalus::GEngineClasses::MenuConstants::MAX_SEL_ACTIONS;++i)
-        if(it.onSelAction[i]==Daedalus::GEngineClasses::MenuConstants::SEL_ACTION_EXECCOMMANDS)
-          execCommands(it.onSelAction_S[i],false);
+      for(size_t i=0;i<phoenix::c_menu_item::select_action_count;++i)
+        if(it->on_sel_action[i]==int(phoenix::c_menu_item_select_action::execute_commands))
+          execCommands(it->on_sel_action_s[i],false);
       return;
       }
     }
@@ -670,38 +679,51 @@ void GameMenu::getText(const Item& it, std::vector<char> &out) {
     out.resize(1);
   out[0]='\0';
 
-  const auto& src = it.handle.text[0];
-  if(it.handle.type==Daedalus::GEngineClasses::C_Menu_Item::MENU_ITEM_TEXT) {
-    size_t size = std::strlen(src.c_str());
+  const auto& src = it.handle->text[0];
+  if(it.handle->type==phoenix::c_menu_item_type::text) {
+    size_t size = src.size();
     out.resize(size+1);
     std::memcpy(out.data(),src.c_str(),size+1);
     return;
     }
 
-  if(it.handle.type==Daedalus::GEngineClasses::C_Menu_Item::MENU_ITEM_CHOICEBOX) {
-    strEnum(src.c_str(),it.value,out);
+  if(it.handle->type==phoenix::c_menu_item_type::choicebox) {
+    strEnum(src,it.value,out);
     return;
     }
   }
 
 const GthFont& GameMenu::getTextFont(const GameMenu::Item &it) {
   if(!isEnabled(it.handle))
-    return Resources::font(it.handle.fontName.c_str(),Resources::FontType::Disabled);
+    return Resources::font(it.handle->fontname,Resources::FontType::Disabled);
   if(&it==selectedItem())
-    return Resources::font(it.handle.fontName.c_str(),Resources::FontType::Hi);
-  return Resources::font(it.handle.fontName.c_str());
+    return Resources::font(it.handle->fontname,Resources::FontType::Hi);
+  return Resources::font(it.handle->fontname);
   }
 
-bool GameMenu::isSelectable(const Daedalus::GEngineClasses::C_Menu_Item& item) {
-  return (item.flags & Daedalus::GEngineClasses::C_Menu_Item::EFlags::IT_SELECTABLE);
+bool GameMenu::isSelectable(const std::shared_ptr<phoenix::c_menu_item>& item) {
+  return item != nullptr && (item->flags & phoenix::c_menu_item_flags::selectable) && !isHidden(item);
   }
 
-bool GameMenu::isEnabled(const Daedalus::GEngineClasses::C_Menu_Item &item) {
-  if((item.flags & Daedalus::GEngineClasses::C_Menu_Item::IT_ONLY_IN_GAME) && !isInGameAndAlive())
+bool GameMenu::isEnabled(const std::shared_ptr<phoenix::c_menu_item>& item) {
+  if(item==nullptr)
     return false;
-  if((item.flags & Daedalus::GEngineClasses::C_Menu_Item::IT_ONLY_OUT_GAME) && isInGameAndAlive())
+  if((item->flags & phoenix::c_menu_item_flags::only_ingame) && !Gothic::inst().isInGameAndAlive())
+    return false;
+  if((item->flags & phoenix::c_menu_item_flags::only_outgame) && Gothic::inst().isInGameAndAlive())
     return false;
   return true;
+  }
+
+bool GameMenu::isHidden(const std::shared_ptr<phoenix::c_menu_item>& item) {
+  if(item==nullptr)
+    return false;
+  if(item->hide_if_option_set.empty())
+    return false;
+
+  auto opt = Gothic::inst().settingsGetI(item->hide_if_option_section_set,
+                                         item->hide_if_option_set);
+  return opt==item->hide_on_value;
   }
 
 void GameMenu::exec(Item &p, int slideDx) {
@@ -710,7 +732,7 @@ void GameMenu::exec(Item &p, int slideDx) {
     if(it==&p)
       execSingle(*it,slideDx); else
       execChgOption(*it,slideDx);
-    if(it->handle.flags & Daedalus::GEngineClasses::C_Menu_Item::IT_EFFECTS_NEXT) {
+    if(it->handle->flags & phoenix::c_menu_item_flags::effects) {
       auto next=selectedNextItem(it);
       if(next!=&p)
         it=next;
@@ -726,17 +748,18 @@ void GameMenu::exec(Item &p, int slideDx) {
   }
 
 void GameMenu::execSingle(Item &it, int slideDx) {
-  using namespace Daedalus::GEngineClasses::MenuConstants;
+  using phoenix::c_menu_item_select_action;
+  using phoenix::c_menu_item_select_event;
 
   auto& item          = it.handle;
-  auto& onSelAction   = item.onSelAction;
-  auto& onSelAction_S = item.onSelAction_S;
-  auto& onEventAction = item.onEventAction;
+  auto& onSelAction   = item->on_sel_action;
+  auto& onSelAction_S = item->on_sel_action_s;
+  auto& onEventAction = item->on_event_action;
 
-  if(item.type==Daedalus::GEngineClasses::C_Menu_Item::MENU_ITEM_INPUT && slideDx==0) {
+  if(item->type==phoenix::c_menu_item_type::input && slideDx==0) {
     ctrlInput = &it;
-    if(item.onChgSetOption.empty()) {
-      SavNameDialog dlg{item.text[0]};
+    if(item->on_chg_set_option.empty()) {
+      SavNameDialog dlg{item->text[0]};
       if(it.savHdr.version==0)
         dlg.text = "";
       dlg.resize(owner.size());
@@ -756,28 +779,28 @@ void GameMenu::execSingle(Item &it, int slideDx) {
       if(dlg.key==Event::K_ESCAPE)
         next = KeyCodec::keyToCode(dlg.mkey); else
         next = KeyCodec::keyToCode(dlg.key);
-      keyCodec.set(item.onChgSetOptionSection.c_str(), item.onChgSetOption.c_str(), next);
+      keyCodec.set(item->on_chg_set_option_section, item->on_chg_set_option, next);
       updateItem(it);
       return; //HACK: there is a SEL_ACTION_BACK token in same item
       }
     }
 
-  for(size_t i=0; i<Daedalus::GEngineClasses::MenuConstants::MAX_SEL_ACTIONS; ++i) {
-    auto action = onSelAction[i];
+  for(size_t i=0; i<phoenix::c_menu_item::select_action_count; ++i) {
+    auto action = c_menu_item_select_action(onSelAction[i]);
     switch(action) {
-      case SEL_ACTION_UNDEF:
+      case c_menu_item_select_action::unknown:
         break;
-      case SEL_ACTION_BACK:
+      case c_menu_item_select_action::back:
         Gothic::inst().emitGlobalSound(Gothic::inst().loadSoundFx("MENU_ESC"));
         exitFlag = true;
         break;
-      case SEL_ACTION_STARTMENU:
-        if(vm.getDATFile().hasSymbolName(onSelAction_S[i].c_str()))
-          owner.pushMenu(new GameMenu(owner,keyCodec,vm,onSelAction_S[i].c_str(),keyClose()));
+      case c_menu_item_select_action::start_menu:
+        if(vm.find_symbol_by_name(onSelAction_S[i]) != nullptr)
+          owner.pushMenu(new GameMenu(owner,keyCodec,vm,onSelAction_S[i],keyClose()));
         break;
-      case SEL_ACTION_STARTITEM:
+      case c_menu_item_select_action::start_item:
         break;
-      case SEL_ACTION_CLOSE:
+      case c_menu_item_select_action::close:
         Gothic::inst().emitGlobalSound(Gothic::inst().loadSoundFx("MENU_ESC"));
         closeFlag = true;
         if(onSelAction_S[i]=="NEW_GAME")
@@ -789,46 +812,48 @@ void GameMenu::execSingle(Item &it, int slideDx) {
         else if(onSelAction_S[i]=="SAVEGAME_LOAD")
           execLoadGame(it);
         break;
-      case SEL_ACTION_CONCOMMANDS:
+      case c_menu_item_select_action::con_commands:
         // unknown
         break;
-      case SEL_ACTION_PLAY_SOUND:
-        Gothic::inst().emitGlobalSound(Gothic::inst().loadSoundFx(onSelAction_S[i].c_str()));
+      case c_menu_item_select_action::play_sound:
+        Gothic::inst().emitGlobalSound(Gothic::inst().loadSoundFx(onSelAction_S[i]));
         break;
-      case SEL_ACTION_EXECCOMMANDS:
+      case c_menu_item_select_action::execute_commands:
         execCommands(onSelAction_S[i],true);
         break;
       }
     }
 
-  if(onEventAction[SEL_EVENT_EXECUTE]>0){
-    vm.runFunctionBySymIndex(size_t(onEventAction[SEL_EVENT_EXECUTE]));
+  if(onEventAction[int(c_menu_item_select_event::execute)]>0){
+    auto* sym = vm.find_symbol_by_index(uint32_t(onEventAction[int(c_menu_item_select_event::execute)]));
+    if (sym != nullptr)
+      vm.call_function(sym);
     }
 
   execChgOption(it,slideDx);
   }
 
 void GameMenu::execChgOption(Item &item, int slideDx) {
-  auto& sec = item.handle.onChgSetOptionSection;
-  auto& opt = item.handle.onChgSetOption;
+  auto& sec = item.handle->on_chg_set_option_section;
+  auto& opt = item.handle->on_chg_set_option;
   if(sec.empty() || opt.empty())
     return;
 
-  if(item.handle.type==Daedalus::GEngineClasses::C_Menu_Item::MENU_ITEM_SLIDER && slideDx!=0) {
+  if(item.handle->type==phoenix::c_menu_item_type::slider && slideDx!=0) {
     updateItem(item);
-    float v = Gothic::settingsGetF(sec.c_str(),opt.c_str());
+    float v = Gothic::settingsGetF(sec, opt);
     v  = std::max(0.f,std::min(v+float(slideDx)*0.03f,1.f));
-    Gothic::settingsSetF(sec.c_str(), opt.c_str(), v);
+    Gothic::settingsSetF(sec, opt, v);
     }
-  if(item.handle.type==Daedalus::GEngineClasses::C_Menu_Item::MENU_ITEM_CHOICEBOX && slideDx==0) {
+  if(item.handle->type==phoenix::c_menu_item_type::choicebox && slideDx==0) {
     updateItem(item);
     item.value += 1; // next value
 
-    int cnt = int(strEnumSize(item.handle.text[0].c_str()));
+    int cnt = int(strEnumSize(item.handle->text[0]));
     if(cnt>0)
       item.value%=cnt; else
       item.value =0;
-    Gothic::settingsSetI(sec.c_str(), opt.c_str(), item.value);
+    Gothic::settingsSetI(sec, opt, item.value);
     }
   }
 
@@ -837,9 +862,8 @@ void GameMenu::execSaveGame(const GameMenu::Item& item) {
   if(id==size_t(-1))
     return;
 
-  char fname[64]={};
-  std::snprintf(fname,sizeof(fname)-1,"save_slot_%d.sav",int(id));
-  Gothic::inst().save(fname,item.handle.text[0].c_str());
+  string_frm fname("save_slot_",int(id),".sav");
+  Gothic::inst().save(fname,item.handle->text[0]);
   }
 
 void GameMenu::execLoadGame(const GameMenu::Item &item) {
@@ -847,6 +871,7 @@ void GameMenu::execLoadGame(const GameMenu::Item &item) {
   if(id==size_t(-1))
     return;
 
+  //string_frm fname("save_slot_",int(id),".sav");
   char fname[64]={};
   std::snprintf(fname,sizeof(fname)-1,"save_slot_%d.sav",int(id));
   if(!FileUtil::exists(TextCodec::toUtf16(fname)))
@@ -854,15 +879,13 @@ void GameMenu::execLoadGame(const GameMenu::Item &item) {
   Gothic::inst().load(fname);
   }
 
-void GameMenu::execCommands(const Daedalus::ZString str, bool isClick) {
-  using namespace Daedalus::GEngineClasses::MenuConstants;
-
+void GameMenu::execCommands(std::string str, bool isClick) {
   if(str.find("EFFECTS ")==0) {
     // menu log
-    const char* arg0 = str.c_str()+std::strlen("EFFECTS ");
-    for(uint32_t id=0; id<Daedalus::GEngineClasses::MenuConstants::MAX_ITEMS; ++id) {
+    const char* arg0 = str.data()+std::strlen("EFFECTS ");
+    for(uint32_t id=0; id<phoenix::c_menu::item_count; ++id) {
       auto& i = hItems[id];
-      if(i.handle.type==MENU_ITEM_LISTBOX) {
+      if(i.handle != nullptr && i.handle->type==phoenix::c_menu_item_type::listbox) {
         i.visible = (i.name==arg0);
         if(i.visible && isClick) {
           const uint32_t prev = curItem;
@@ -879,7 +902,7 @@ void GameMenu::execCommands(const Daedalus::ZString str, bool isClick) {
   if(!isClick)
     return;
   if(str.find("RUN ")==0) {
-    const char* what = str.c_str()+4;
+    const char* what = str.data()+4;
     while(*what==' ')
       ++what;
     for(auto& i:hItems)
@@ -896,13 +919,13 @@ void GameMenu::execCommands(const Daedalus::ZString str, bool isClick) {
 
 void GameMenu::updateItem(GameMenu::Item &item) {
   auto& it   = item.handle;
-  item.value = Gothic::settingsGetI(it.onChgSetOptionSection.c_str(), it.onChgSetOption.c_str());
+  item.value = Gothic::settingsGetI(it->on_chg_set_option_section, it->on_chg_set_option);
   updateSavTitle(item);
   }
 
 void GameMenu::updateSavTitle(GameMenu::Item& sel) {
-  if(sel.handle.onSelAction_S[0]!="SAVEGAME_LOAD" &&
-     sel.handle.onSelAction_S[1]!="SAVEGAME_SAVE")
+  if(sel.handle->on_sel_action_s[0]!="SAVEGAME_LOAD" &&
+     sel.handle->on_sel_action_s[1]!="SAVEGAME_SAVE")
     return;
   const size_t id = saveSlotId(sel);
   if(id==size_t(-1))
@@ -912,7 +935,7 @@ void GameMenu::updateSavTitle(GameMenu::Item& sel) {
   std::snprintf(fname,sizeof(fname)-1,"save_slot_%d.sav",int(id));
 
   if(!FileUtil::exists(TextCodec::toUtf16(fname))) {
-    sel.handle.text[0] = "---";
+    sel.handle->text[0] = "---";
     return;
     }
 
@@ -922,10 +945,12 @@ void GameMenu::updateSavTitle(GameMenu::Item& sel) {
     Serialize reader(fin);
     reader.setEntry("header");
     reader.read(hdr);
-    sel.handle.text[0] = hdr.name.c_str();
+    sel.handle->text[0] = hdr.name;
     sel.savHdr         = std::move(hdr);
 
     if(reader.setEntry("priview.png"))
+      reader.read(sel.savPriview); // legacy
+    else if(reader.setEntry("preview.png"))
       reader.read(sel.savPriview);
     }
   catch(std::bad_alloc&) {
@@ -941,8 +966,8 @@ void GameMenu::updateSavTitle(GameMenu::Item& sel) {
   }
 
 void GameMenu::updateSavThumb(GameMenu::Item &sel) {
-  if(sel.handle.onSelAction_S[0]!="SAVEGAME_LOAD" &&
-     sel.handle.onSelAction_S[1]!="SAVEGAME_SAVE")
+  if(sel.handle->on_sel_action_s[0]!="SAVEGAME_LOAD" &&
+     sel.handle->on_sel_action_s[1]!="SAVEGAME_SAVE")
     return;
 
   if(!implUpdateSavThumb(sel)) {
@@ -959,15 +984,8 @@ void GameMenu::updateVideo() {
   set("MENUITEM_VID_RESOLUTION_CHOICE", "");
   }
 
-void GameMenu::setDefaultKeys(const char* preset) {
+void GameMenu::setDefaultKeys(std::string_view preset) {
   keyCodec.setDefaultKeys(preset);
-  }
-
-bool GameMenu::isInGameAndAlive() {
-  auto pl = Gothic::inst().player();
-  if(pl==nullptr || pl->isDead())
-    return false;
-  return Gothic::inst().isInGame();
   }
 
 bool GameMenu::implUpdateSavThumb(GameMenu::Item& sel) {
@@ -987,7 +1005,7 @@ bool GameMenu::implUpdateSavThumb(GameMenu::Item& sel) {
   savThumb = Resources::loadTexturePm(sel.savPriview);
 
   set("MENUITEM_LOADSAVE_THUMBPIC",       &savThumb);
-  set("MENUITEM_LOADSAVE_LEVELNAME_VALUE",hdr.world.c_str());
+  set("MENUITEM_LOADSAVE_LEVELNAME_VALUE",hdr.world);
 
   std::snprintf(form,sizeof(form),"%d.%d.%d - %d:%02d",int(hdr.pcTime.tm_mday),int(hdr.pcTime.tm_mon+1),int(1900+hdr.pcTime.tm_year), int(hdr.pcTime.tm_hour),int(hdr.pcTime.tm_min));
   set("MENUITEM_LOADSAVE_DATETIME_VALUE", form);
@@ -1020,11 +1038,11 @@ size_t GameMenu::saveSlotId(const GameMenu::Item &sel) {
   return size_t(-1);
   }
 
-const char *GameMenu::strEnum(const char *en, int id, std::vector<char> &out) {
+std::string_view GameMenu::strEnum(std::string_view en, int id, std::vector<char> &out) {
   int num=0;
 
   size_t i=0;
-  for(size_t r=0;en[r];++r)
+  for(size_t r=0; r<en.size(); ++r)
     if(en[r]=='#'){
       i=r+1;
       break;
@@ -1032,7 +1050,7 @@ const char *GameMenu::strEnum(const char *en, int id, std::vector<char> &out) {
 
   for(;en[i];++i){
     size_t b=i;
-    for(size_t r=i;en[r];++r,++i)
+    for(size_t r=i; r<en.size(); ++r,++i)
       if(en[r]=='|')
         break;
 
@@ -1041,26 +1059,28 @@ const char *GameMenu::strEnum(const char *en, int id, std::vector<char> &out) {
       out.resize(sz+1);
       std::memcpy(&out[0],&en[b],sz);
       out[sz]='\0';
-      return textBuf.data();
+      return out.data();
       }
     ++num;
     }
-  for(size_t i=0;en[i];++i){
+
+  for(size_t i=0; i<en.size(); ++i){
     if(en[i]=='#' || en[i]=='|'){
       out.resize(i+1);
-      std::memcpy(&out[0],en,i);
+      std::memcpy(&out[0],en.data(),i);
       out[i]='\0';
       return out.data();
       }
     }
+
   return "";
   }
 
-size_t GameMenu::strEnumSize(const char *en) {
-  if(en==nullptr)
+size_t GameMenu::strEnumSize(std::string_view en) {
+  if(en.empty())
     return 0;
   size_t cnt = 0;
-  for(size_t i=0;en[i];++i) {
+  for(size_t i=0; i<en.size(); ++i) {
     if(en[i]=='#' || en[i]=='|') {
       cnt += en[i]=='|' ? 2 : 1;
       i++;
@@ -1082,33 +1102,21 @@ void GameMenu::set(std::string_view item, const Texture2d *value) {
   }
 
 void GameMenu::set(std::string_view item, const uint32_t value) {
-  char buf[16]={};
-  std::snprintf(buf,sizeof(buf),"%u",value);
-  set(item,buf);
+  set(item,string_frm(value));
   }
 
 void GameMenu::set(std::string_view item, const int32_t value) {
-  char buf[16]={};
-  std::snprintf(buf,sizeof(buf),"%d",value);
-  set(item,buf);
-  }
-
-void GameMenu::set(std::string_view item, const int32_t value, const char *post) {
-  char buf[32]={};
-  std::snprintf(buf,sizeof(buf),"%d%s",value,post);
-  set(item,buf);
+  set(item,string_frm(value));
   }
 
 void GameMenu::set(std::string_view item, const int32_t value, const int32_t max) {
-  char buf[32]={};
-  std::snprintf(buf,sizeof(buf),"%d/%d",value,max);
-  set(item,buf);
+  set(item,string_frm(value,"/",max));
   }
 
-void GameMenu::set(std::string_view item, const char* value) {
+void GameMenu::set(std::string_view item, std::string_view value) {
   for(auto& i:hItems)
     if(i.name==item) {
-      i.handle.text[0] = value;
+      i.handle->text[0] = value;
       return;
       }
   }
@@ -1125,12 +1133,12 @@ void GameMenu::updateValues() {
       i.visible=false;
       }
     if(i.name=="MENU_ITEM_DAY") {
-      i.handle.text[0] = Daedalus::ZString::toStr(time.day());
+      i.handle->text[0] = std::to_string(time.day());
       }
     if(i.name=="MENU_ITEM_TIME") {
       char form[64]={};
       std::snprintf(form,sizeof(form),"%d:%02d",int(time.hour()),int(time.minute()));
-      i.handle.text[0] = form;
+      i.handle->text[0] = form;
       }
     }
 
@@ -1146,43 +1154,43 @@ void GameMenu::setPlayer(const Npc &pl) {
     return;
 
   auto& sc    = world->script();
-  auto& gilds = sc.getSymbol("TXT_GUILDS");
-  auto& tal   = sc.getSymbol("TXT_TALENTS");
-  auto& talV  = sc.getSymbol("TXT_TALENTS_SKILLS");
+  auto* gilds = sc.findSymbol("TXT_GUILDS");
+  auto* tal   = sc.findSymbol("TXT_TALENTS");
+  auto* talV  = sc.findSymbol("TXT_TALENTS_SKILLS");
 
-  set("MENU_ITEM_PLAYERGUILD",gilds.getString(pl.guild()).c_str());
+  if(gilds==nullptr || tal==nullptr || talV==nullptr) {
+    return;
+    }
 
-  set("MENU_ITEM_LEVEL",      pl.level());
-  set("MENU_ITEM_EXP",        pl.experience());
-  set("MENU_ITEM_LEVEL_NEXT", pl.experienceNext());
-  set("MENU_ITEM_LEARN",      pl.learningPoints());
+  set("MENU_ITEM_PLAYERGUILD", gilds->get_string(pl.guild()));
+
+  set("MENU_ITEM_LEVEL",       pl.level());
+  set("MENU_ITEM_EXP",         pl.experience());
+  set("MENU_ITEM_LEVEL_NEXT",  pl.experienceNext());
+  set("MENU_ITEM_LEARN",       pl.learningPoints());
 
   set("MENU_ITEM_ATTRIBUTE_1", pl.attribute(ATR_STRENGTH));
   set("MENU_ITEM_ATTRIBUTE_2", pl.attribute(ATR_DEXTERITY));
   set("MENU_ITEM_ATTRIBUTE_3", pl.attribute(ATR_MANA),      pl.attribute(ATR_MANAMAX));
   set("MENU_ITEM_ATTRIBUTE_4", pl.attribute(ATR_HITPOINTS), pl.attribute(ATR_HITPOINTSMAX));
 
-  set("MENU_ITEM_ARMOR_1", pl.protection(PROT_EDGE));
-  set("MENU_ITEM_ARMOR_2", pl.protection(PROT_POINT)); // not sure about it
-  set("MENU_ITEM_ARMOR_3", pl.protection(PROT_FIRE));
-  set("MENU_ITEM_ARMOR_4", pl.protection(PROT_MAGIC));
+  set("MENU_ITEM_ARMOR_1",     pl.protection(PROT_EDGE));
+  set("MENU_ITEM_ARMOR_2",     pl.protection(PROT_POINT)); // not sure about it
+  set("MENU_ITEM_ARMOR_3",     pl.protection(PROT_FIRE));
+  set("MENU_ITEM_ARMOR_4",     pl.protection(PROT_MAGIC));
 
-  const int talentMax = Gothic::inst().version().game==2 ? TALENT_MAX_G2 : TALENT_MAX_G1;
-  for(int i=0;i<talentMax;++i){
-    auto& str = tal.getString(size_t(i));
+  const bool g2        = Gothic::inst().version().game==2;
+  const int  talentMax = g2 ? TALENT_MAX_G2 : TALENT_MAX_G1;
+  for(int i=0; i<talentMax; ++i) {
+    auto& str = tal->get_string(size_t(i));
     if(str.empty())
       continue;
 
-    char buf[64]={};
-    std::snprintf(buf,sizeof(buf),"MENU_ITEM_TALENT_%d_TITLE",i);
-    set(buf,str.c_str());
+    const int sk  = pl.talentSkill(Talent(i));
+    const int val = g2 ? pl.hitChance(Talent(i)) : pl.talentValue(Talent(i));
 
-    const int sk=pl.talentSkill(Talent(i));
-    std::snprintf(buf,sizeof(buf),"MENU_ITEM_TALENT_%d_SKILL",i);
-    set(buf,strEnum(talV.getString(size_t(i)).c_str(),sk,textBuf));
-
-    const int val=pl.hitChanse(Talent(i));
-    std::snprintf(buf,sizeof(buf),"MENU_ITEM_TALENT_%d",i);
-    set(buf,val,"%");
+    set(string_frm("MENU_ITEM_TALENT_",i,"_TITLE"), str);
+    set(string_frm("MENU_ITEM_TALENT_",i,"_SKILL"), strEnum(talV->get_string(size_t(i)),sk,textBuf));
+    set(string_frm("MENU_ITEM_TALENT_",i),          string_frm(val,"%"));
     }
   }

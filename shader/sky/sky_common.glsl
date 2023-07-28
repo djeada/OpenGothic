@@ -1,12 +1,14 @@
-#include "../common.glsl"
-#include "../tonemapping.glsl"
+#ifndef SKY_COMMON_GLSL
+#define SKY_COMMON_GLSL
 
-const float g        = 0.8;          // light concentration .76 //.45 //.6  .45 is normaL
+#include "common.glsl"
+#include "lighting/tonemapping.glsl"
 
 // Table 1: Coefficients of the different participating media compo-nents constituting the Earth’s atmosphere
 // These are per megameter.
 const vec3  rayleighScatteringBase = vec3(0.175, 0.409, 1.0) / 1e6;
 const float rayleighAbsorptionBase = 0.0;
+const float g                      = 0.8;          // light concentration .76 //.45 //.6  .45 is normaL
 
 const float mieScatteringBase      = 3.996 / 1e6;
 const float mieAbsorptionBase      = 4.40  / 1e6;
@@ -16,27 +18,20 @@ const vec3  ozoneAbsorptionBase    = vec3(0.650, 1.881, .085) / 1e6;
 
 layout(push_constant, std430) uniform UboPush {
   mat4  viewProjectInv;
-  vec2  dxy0;
-  vec2  dxy1;
+  vec2  cloudsDir0;
+  vec2  cloudsDir1;
   vec3  sunDir;
   float night;
   vec3  clipInfo;
   float plPosY;
   float rayleighScatteringScale;
   float GSunIntensity;
+  float exposure;
   } push;
 
 vec3 inverse(vec3 pos) {
   vec4 ret = push.viewProjectInv*vec4(pos,1.0);
   return (ret.xyz/ret.w)/100.f;
-  }
-
-vec4 mixClr(vec4 s, vec4 d) {
-  float a  =  (1-s.a)*d.a + s.a;
-  if(a<=0.0)
-    return vec4(0);
-  vec3  c  = ((1-s.a)*d.a*d.rgb+s.a*s.rgb)/a;
-  return vec4(c,a);
   }
 
 float miePhase(float cosTheta) {
@@ -53,37 +48,9 @@ float rayleighPhase(float cosTheta) {
   return k*(1.0+cosTheta*cosTheta);
   }
 
-// From https://gamedev.stackexchange.com/questions/96459/fast-ray-sphere-collision-code.
-float rayIntersect(vec3 v, vec3 d, float R) {
-  float b = dot(v, d);
-  float c = dot(v, v) - R*R;
-  if(c > 0.0f && b > 0.0)
-    return -1.0;
-  float discr = b*b - c;
-  if(discr < 0.0)
-    return -1.0;
-  // Special case: inside sphere, use far discriminant
-  if(discr > b*b)
-    return (-b + sqrt(discr));
-  return -b - sqrt(discr);
-  }
-
-vec3 sunWithBloom(vec3 view, vec3 sunDir) {
-  const float sunSolidAngle  = 2.0*M_PI/180.0;
-  const float minSunCosTheta = cos(sunSolidAngle);
-
-  float cosTheta = dot(view, sunDir);
-  if(cosTheta >= minSunCosTheta)
-    return vec3(1.0);
-
-  float offset        = minSunCosTheta - cosTheta;
-  float gaussianBloom = exp(-offset*50000.0)*0.5;
-  float invBloom      = 1.0/(0.02 + offset*300.0)*0.01;
-  return vec3(gaussianBloom+invBloom);
-  }
-
 // 4. Atmospheric model
 void scatteringValues(vec3 pos,
+                      float clouds,
                       out vec3 rayleighScattering,
                       out float mieScattering,
                       out vec3 extinction) {
@@ -96,10 +63,14 @@ void scatteringValues(vec3 pos,
   rayleighScattering       = rayleighScatteringBase*rayleighDensity*push.rayleighScatteringScale;
   float rayleighAbsorption = rayleighAbsorptionBase*rayleighDensity;
 
-  mieScattering            = (mieScatteringBase/*+0.02*/)*mieDensity;
+  mieScattering            = mieScatteringBase*mieDensity;
   float mieAbsorption      = mieAbsorptionBase*mieDensity;
 
   vec3  ozoneAbsorption    = ozoneAbsorptionBase*ozoneDistribution;
+
+  // Clouds Ah-Hook
+  mieScattering      *= exp( clouds*3.0); // (1.0+clouds*4.0);
+  rayleighScattering *= exp(-clouds*3.0); // (1.0-clouds*0.5);
 
   extinction = rayleighScattering + rayleighAbsorption +
                mieScattering + mieAbsorption +
@@ -117,3 +88,5 @@ vec3 textureLUT(sampler2D tex, vec3 pos, vec3 sunDir) {
   uv.y = (height - RPlanet)/(RAtmos - RPlanet);
   return texture(tex, uv).rgb;
   }
+
+#endif

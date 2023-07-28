@@ -1,6 +1,8 @@
 #pragma once
 
-#include <daedalus/DaedalusStdlib.h>
+#include <phoenix/vm.hh>
+#include <phoenix/ext/daedalus_classes.hh>
+
 #include <Tempest/Point>
 #include <optional>
 
@@ -11,7 +13,7 @@ class World;
 
 class VisualFx final {
   public:
-    VisualFx(const Daedalus::GEngineClasses::CFx_Base& src, Daedalus::DaedalusVM& tmpVm, std::string_view name);
+    VisualFx(const phoenix::c_fx_base& src, phoenix::vm& tmpVm, std::string_view name);
 
     enum Collision : uint8_t {
       NoCollision = 0,
@@ -55,7 +57,7 @@ class VisualFx final {
     class Key {
       public:
         Key() = default;
-        Key(Daedalus::GEngineClasses::C_ParticleFXEmitKey&& k);
+        Key(const phoenix::c_particle_fx_emit_key& k);
 
         // vars which influence all particles all time
         const ParticleFx* visName = nullptr;
@@ -74,18 +76,18 @@ class VisualFx final {
         float             pfx_shpScaleFPS=0.f;
         float             pfx_shpDistribWalkSpeed=0.f;
         OptVec3           pfx_shpOffsetVec;
-        Daedalus::ZString pfx_shpDistribType_S;
-        Daedalus::ZString pfx_dirMode_S;
-        Daedalus::ZString pfx_dirFOR_S;
-        Daedalus::ZString pfx_dirModeTargetFOR_S;
-        Daedalus::ZString pfx_dirModeTargetPos_S;
+        std::string       pfx_shpDistribType_S;
+        std::string       pfx_dirMode_S;
+        std::string       pfx_dirFOR_S;
+        std::string       pfx_dirModeTargetFOR_S;
+        std::string       pfx_dirModeTargetPos_S;
         float             pfx_velAvg=0.f;
         float             pfx_lspPartAvg=0.f;
         float             pfx_visAlphaStart=0.f;
 
-        Daedalus::ZString lightPresetName;
+        std::string       lightPresetName;
         float             lightRange=0.f;
-        Daedalus::ZString sfxID;
+        std::string       sfxID;
         int               sfxIsAmbient=0;
         const VisualFx*   emCreateFXID = nullptr;
 
@@ -99,55 +101,55 @@ class VisualFx final {
       };
 
     const char*           dbgName = "";
-    Daedalus::ZString     visName_S;  // ParticleFx ?
-    Tempest::Vec2	        visSize;
-    float	                visAlpha                 = 0.f;
-    Material::AlphaFunc	  visAlphaBlendFunc        = Material::AlphaFunc::Solid;
+    std::string           visName_S;  // ParticleFx ?
+    Tempest::Vec2         visSize;
+    float                 visAlpha                 = 0.f;
+    Material::AlphaFunc   visAlphaBlendFunc        = Material::AlphaFunc::Solid;
     float                 visTexAniFPS             = 0.f;
     bool                  visTexAniIsLooping       = false;
 
-    Trajectory	          emTrjMode                = TrajectoryNone;
-    std::string	          emTrjOriginNode;
+    Trajectory            emTrjMode                = TrajectoryNone;
+    std::string           emTrjOriginNode;
     std::string           emTrjTargetNode;
     float                 emTrjTargetRange         = 0.f;
-    float	                emTrjTargetAzi           = 0.f;
+    float                 emTrjTargetAzi           = 0.f;
     float                 emTrjTargetElev          = 0.f;
-    int32_t		            emTrjNumKeys             = 0;
-    int32_t		            emTrjNumKeysVar          = 0;
-    float	                emTrjAngleElevVar        = 0.f;
-    float	                emTrjAngleHeadVar        = 0.f;
-    float	                emTrjKeyDistVar          = 0.f;
+    int32_t               emTrjNumKeys             = 0;
+    int32_t               emTrjNumKeysVar          = 0;
+    float                 emTrjAngleElevVar        = 0.f;
+    float                 emTrjAngleHeadVar        = 0.f;
+    float                 emTrjKeyDistVar          = 0.f;
     LoopMode              emTrjLoopMode            = LoopMode::LoopModeNone;
     EaseFunc              emTrjEaseFunc            = EaseFunc::Linear;
-    float     	          emTrjEaseVel             = 0.f;
-    float	                emTrjDynUpdateDelay      = 0.f;
+    float                 emTrjEaseVel             = 0.f;
+    float                 emTrjDynUpdateDelay      = 0.f;
     bool                  emTrjDynUpdateTargetOnly = false;
 
-    const VisualFx*   	  emFXCreate               = nullptr;
+    const VisualFx*       emFXCreate               = nullptr;
     std::string           emFXInvestOrigin;
-    std::string   	      emFXInvestTarget;
+    std::string           emFXInvestTarget;
     uint64_t              emFXTriggerDelay         = 0;
     bool                  emFXCreatedOwnTrj        = false;
     Collision             emActionCollDyn          = Collision::NoResp;
     Collision             emActionCollStat         = Collision::NoResp;
     const VisualFx*       emFXCollStat             = nullptr;
-    const VisualFx* 	    emFXCollDyn              = nullptr;
+    const VisualFx*       emFXCollDyn              = nullptr;
     const VisualFx*       emFXCollDynPerc          = nullptr;
     CollisionAlign        emFXCollStatAlign        = CollisionAlign::Normal;
     CollisionAlign        emFXCollDynAlign         = CollisionAlign::Normal;
     uint64_t              emFXLifeSpan             = 0;
 
-    bool  	              emCheckCollision        = false;
+    bool                  emCheckCollision        = false;
     bool                  emAdjustShpToOrigin     = false;
     uint64_t              emInvestNextKeyDuration = 0;
-    float	                emFlyGravity            = 0.f;
+    float                 emFlyGravity            = 0.f;
     Tempest::Vec3         emSelfRotVel;
-    Daedalus::ZString     userString[Daedalus::GEngineClasses::VFX_NUM_USERSTRINGS];
-    Daedalus::ZString     lightPresetName;
-    Daedalus::ZString     sfxID;
-    bool    	            sfxIsAmbient            = false;
-    bool    		          sendAssessMagic         = false;
-    float	                secsPerDamage           = 0.f;
+    std::string           userString[phoenix::c_fx_base::user_string_count];
+    std::string           lightPresetName;
+    std::string           sfxID;
+    bool                  sfxIsAmbient            = false;
+    bool                  sendAssessMagic         = false;
+    float                 secsPerDamage           = 0.f;
 
     uint64_t              effectPrefferedTime() const;
     bool                  isMeshEmmiter() const { return emTrjOriginNode=="="; }
@@ -156,10 +158,10 @@ class VisualFx final {
     const Key*            key(SpellFxKey type, int32_t keyLvl=0) const;
 
   private:
-    static Trajectory     loadTrajectory    (const Daedalus::ZString& str);
-    static LoopMode       loadLoopmode      (const Daedalus::ZString& str);
-    static EaseFunc       loadEaseFunc      (const Daedalus::ZString& str);
-    static CollisionAlign loadCollisionAlign(const Daedalus::ZString& str);
+    static Trajectory     loadTrajectory    (std::string_view str);
+    static LoopMode       loadLoopmode      (std::string_view str);
+    static EaseFunc       loadEaseFunc      (std::string_view str);
+    static CollisionAlign loadCollisionAlign(std::string_view str);
 
     static Collision      strToColision(std::string_view s);
 

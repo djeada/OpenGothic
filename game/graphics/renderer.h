@@ -13,6 +13,7 @@
 
 class Camera;
 class InventoryMenu;
+class VideoWidget;
 
 class Renderer final {
   public:
@@ -22,63 +23,115 @@ class Renderer final {
     void resetSwapchain();
     void onWorldChanged();
 
-    void setCameraView(const Camera &camera);
-
     void draw(Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t cmdId, size_t imgId,
               Tempest::VectorImage::Mesh& uiLayer, Tempest::VectorImage::Mesh& numOverlay,
-              InventoryMenu &inventory);
+              InventoryMenu &inventory, VideoWidget& video);
 
     void dbgDraw(Tempest::Painter& painter);
 
     Tempest::Attachment       screenshoot(uint8_t frameId);
 
   private:
+    void updateCamera(const Camera &camera);
     void prepareUniforms();
-    void drawHiZ (Tempest::Encoder<Tempest::CommandBuffer>& cmd, WorldView& wview, uint8_t cmdId);
-    void drawDSM (Tempest::Attachment& result, Tempest::Encoder<Tempest::CommandBuffer>& cmd, const WorldView& view);
-    void drawSSAO(Tempest::Attachment& result, Tempest::Encoder<Tempest::CommandBuffer>& cmd, const WorldView& view);
-    void draw    (Tempest::Attachment& result, Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t cmdId);
+    void setupTlas(const Tempest::AccelerationStructure* tlas);
+
+    void prepareSky       (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId, WorldView& view);
+    void prepareSSAO      (Tempest::Encoder<Tempest::CommandBuffer>& cmd);
+    void prepareFog       (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId, WorldView& view);
+    void prepareIrradiance(Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId);
+
+    void drawHiZ          (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId, WorldView& view);
+    void drawGBuffer      (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId, WorldView& view);
+    void drawGWater       (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId, WorldView& view);
+    void drawShadowMap    (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId, WorldView& view);
+    void drawShadowResolve(Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId, const WorldView& view);
+    void drawLights       (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId, WorldView& view);
+    void drawSky          (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId, WorldView& view);
+    void drawAmbient      (Tempest::Encoder<Tempest::CommandBuffer>& cmd, const WorldView& view);
+    void draw             (Tempest::Attachment& result, Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId);
+    void drawTonemapping  (Tempest::Encoder<Tempest::CommandBuffer>& cmd);
+    void drawReflections  (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId);
+    void drawUnderwater   (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId);
+    void stashSceneAux    (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId);
     void initSettings();
 
     struct Settings {
       const uint32_t shadowResolution   = 2048;
       bool           zEnvMappingEnabled = false;
       bool           zCloudShadowScale  = false;
+
+      float          zVidBrightness     = 0.5;
+      float          zVidContrast       = 0.5;
+      float          zVidGamma          = 0.5;
       } settings;
 
     Frustrum                  frustrum[SceneGlobals::V_Count];
     Tempest::Swapchain&       swapchain;
-    Tempest::Matrix4x4        view, proj, viewProj;
-    Tempest::Matrix4x4        shadow[Resources::ShadowLayers];
-    float                     zNear = 0;
-    float                     zFar  = 0;
+    Tempest::Matrix4x4        proj, viewProj, viewProjLwc;
+    Tempest::Matrix4x4        shadowMatrix[Resources::ShadowLayers];
     Tempest::Vec3             clipInfo;
 
-    Tempest::ZBuffer          zbuffer, zbufferItem, shadowMap[Resources::ShadowLayers];
+    Tempest::Attachment       sceneLinear;
+    Tempest::ZBuffer          zbuffer, shadowMap[Resources::ShadowLayers];
 
-    Tempest::Attachment       gbufEmission;
+    Tempest::Attachment       sceneOpaque;
+    Tempest::Attachment       sceneDepth;
+
     Tempest::Attachment       gbufDiffuse;
     Tempest::Attachment       gbufNormal;
-    Tempest::Attachment       gbufDepth;
+
+    struct Shadow {
+      Tempest::RenderPipeline* composePso = nullptr;
+      Tempest::DescriptorSet   ubo;
+    } shadow;
+
+    struct Water {
+      Tempest::RenderPipeline* reflectionsPso = nullptr;
+      Tempest::DescriptorSet   ubo;
+      Tempest::DescriptorSet   underUbo;
+    } water;
 
     struct SSAO {
-      Tempest::TextureFormat   aoFormat = Tempest::TextureFormat::R8;
-      Tempest::Attachment      ssaoBuf;
-      Tempest::Attachment      blurBuf;
-      Tempest::RenderPipeline* ssaoPso = nullptr;
-      Tempest::RenderPipeline* ssaoComposePso = nullptr;
-      Tempest::DescriptorSet   uboSsao, uboBlur[2], uboCompose;
+      Tempest::TextureFormat    aoFormat = Tempest::TextureFormat::R8;
+      Tempest::StorageImage     ssaoBuf;
+
+      Tempest::ComputePipeline* ssaoPso = nullptr;
+      Tempest::DescriptorSet    uboSsao;
+
+      Tempest::RenderPipeline*  ambientComposePso = nullptr;
+      Tempest::DescriptorSet    uboCompose;
     } ssao;
 
-    Tempest::TextureFormat    shadowFormat  = Tempest::TextureFormat::RGBA8;
+    struct Irradiance {
+      Tempest::StorageImage     lut;
+
+      Tempest::ComputePipeline* pso = nullptr;
+      Tempest::DescriptorSet    ubo;
+      } irradiance;
+
+    struct Tonemapping {
+      Tempest::RenderPipeline* pso = nullptr;
+      Tempest::DescriptorSet   uboTone;
+    } tonemapping;
+
+    struct {
+      Tempest::StorageImage     hiZ;
+      Tempest::DescriptorSet    uboPot;
+      std::vector<Tempest::DescriptorSet> uboMip;
+
+      Tempest::ZBuffer          smProj;
+      Tempest::DescriptorSet    uboReproj;
+
+      Tempest::StorageImage     hiZSm1;
+      Tempest::DescriptorSet    uboPotSm1;
+      std::vector<Tempest::DescriptorSet> uboMipSm1;
+    } hiz;
+
+    Tempest::TextureFormat    shadowFormat  = Tempest::TextureFormat::Depth16;
     Tempest::TextureFormat    zBufferFormat = Tempest::TextureFormat::Depth16;
 
-    Tempest::StorageImage     hiZPot;
-    Tempest::StorageImage     hiZ;
+    Tempest::DescriptorSet    uboStash;
 
-    Tempest::DescriptorSet    uboHiZPot;
-    std::vector<Tempest::DescriptorSet> uboZMip;
-
-    Tempest::DescriptorSet    uboCopy, uboCopyDepth;
     Shaders                   stor;
   };

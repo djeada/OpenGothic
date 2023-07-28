@@ -53,8 +53,11 @@ bool AnimationSolver::hasOverlay(const Skeleton* sk) const {
   return false;
   }
 
-void AnimationSolver::addOverlay(const Skeleton* sk,uint64_t time) {
+void AnimationSolver::addOverlay(const Skeleton* sk, uint64_t time) {
   if(sk==nullptr)
+    return;
+  // incompatible overlay
+  if(baseSk==nullptr || sk->nodes.size()!=baseSk->nodes.size())
     return;
   Overlay ov;
   ov.skeleton = sk;
@@ -107,27 +110,26 @@ const Animation::Sequence* AnimationSolver::solveAnim(AnimationSolver::Anim a, W
   }
 
 const Animation::Sequence* AnimationSolver::implSolveAnim(AnimationSolver::Anim a, WeaponState st, WalkBit wlkMode, const Pose& pose) const {
-  // Atack
+  // Attack
   if(st==WeaponState::Fist) {
-    if(a==Anim::Atack) {
+    if(a==Anim::Attack) {
       if(pose.isInAnim("S_FISTRUNL"))
         return solveFrm("T_FISTATTACKMOVE");
       return solveFrm("S_FISTATTACK");
       }
-    if(a==Anim::AtackBlock)
+    if(a==Anim::AttackBlock)
       return solveFrm("T_FISTPARADE_0");
     }
   else if(st==WeaponState::W1H || st==WeaponState::W2H) {
-    if(a==Anim::Atack && (pose.isInAnim("S_1HWALKL") || pose.isInAnim("S_1HRUNL") ||
-                          pose.isInAnim("S_2HWALKL") || pose.isInAnim("S_2HRUNL")))
+    if(a==Anim::Attack && pose.hasState(BS_RUN))
       return solveFrm("T_%sATTACKMOVE",st);
-    if(a==Anim::AtackL)
+    if(a==Anim::AttackL)
       return solveFrm("T_%sATTACKL",st);
-    if(a==Anim::AtackR)
+    if(a==Anim::AttackR)
       return solveFrm("T_%sATTACKR",st);
-    if(a==Anim::Atack || a==Anim::AtackL || a==Anim::AtackR)
-      return solveFrm("S_%sATTACK",st); // TODO: proper atack  window
-    if(a==Anim::AtackBlock) {
+    if(a==Anim::Attack || a==Anim::AttackL || a==Anim::AttackR)
+      return solveFrm("S_%sATTACK",st);
+    if(a==Anim::AttackBlock) {
       const Animation::Sequence* s=nullptr;
       switch(std::rand()%3){
         case 0: s = solveFrm("T_%sPARADE_0",   st); break;
@@ -138,7 +140,7 @@ const Animation::Sequence* AnimationSolver::implSolveAnim(AnimationSolver::Anim 
         s = solveFrm("T_%sPARADE_0",st);
       return s;
       }
-    if(a==Anim::AtackFinish)
+    if(a==Anim::AttackFinish)
       return solveFrm("T_%sSFINISH",st);
     }
   else if(st==WeaponState::Bow || st==WeaponState::CBow) {
@@ -151,27 +153,34 @@ const Animation::Sequence* AnimationSolver::implSolveAnim(AnimationSolver::Anim 
         return solveFrm("S_%sAIM",st);
       return solveFrm("S_%sRUN",st);
       }
-    if(a==Anim::Atack) {
+    if(a==Anim::Attack) {
       auto bs = pose.bodyState();
       if(bs==BS_AIMNEAR || bs==BS_AIMFAR)
         return solveFrm("S_%sSHOOT",st);
       }
-    if(a==Anim::Idle)
-      return solveFrm("S_%sRUN",st);
     }
+
   if(a==Anim::MagNoMana)
     return solveFrm("T_CASTFAIL");
   // Move
   if(a==Idle) {
+    const Animation::Sequence* s = nullptr;
     if(bool(wlkMode & WalkBit::WM_Dive))
-      return solveFrm("S_DIVE");
-    if(bool(wlkMode & WalkBit::WM_Swim))
-      return solveFrm("S_SWIM");
-    if(bool(wlkMode&WalkBit::WM_Sneak))
-      return solveFrm("S_%sSNEAK",st);
-    if(bool(wlkMode&WalkBit::WM_Walk))
-      return solveFrm("S_%sWALK",st);
-    return solveFrm("S_%sRUN",st);
+      s = solveFrm("S_DIVE");
+    else if(bool(wlkMode & WalkBit::WM_Swim))
+      s = solveFrm("S_SWIM");
+    else if(bool(wlkMode&WalkBit::WM_Sneak))
+      s = solveFrm("S_%sSNEAK",st);
+    else if(bool(wlkMode&WalkBit::WM_Walk))
+      s = solveFrm("S_%sWALK",st);
+    else
+      s = solveFrm("S_%sRUN",st);
+
+    if(s==nullptr) {
+      // make sure that 'Idle' has something at least
+      s = solveFrm("S_%sWALK",st);
+      }
+    return s;
     }
   if(a==Move)  {
     if(bool(wlkMode & WalkBit::WM_Dive)) {
@@ -179,14 +188,17 @@ const Animation::Sequence* AnimationSolver::implSolveAnim(AnimationSolver::Anim 
         return solveFrm("S_DIVEF",st); else
         return solveFrm("S_DIVE");
       }
+    const Animation::Sequence* s = nullptr;
     if(bool(wlkMode & WalkBit::WM_Swim))
-      return solveFrm("S_SWIMF",st);
-    if(bool(wlkMode & WalkBit::WM_Sneak))
-      return solveFrm("S_%sSNEAKL",st);
-    if(bool(wlkMode & WalkBit::WM_Walk))
-      return solveFrm("S_%sWALKL",st);
-    if(bool(wlkMode & WalkBit::WM_Water))
-      return solveFrm("S_%sWALKWL",st);
+      s = solveFrm("S_SWIMF",st);
+    else if(bool(wlkMode & WalkBit::WM_Sneak))
+      s = solveFrm("S_%sSNEAKL",st);
+    else if(bool(wlkMode & WalkBit::WM_Walk))
+      s = solveFrm("S_%sWALKL",st);
+    else if(bool(wlkMode & WalkBit::WM_Water))
+      s = solveFrm("S_%sWALKWL",st);
+    if(s!=nullptr)
+      return s;
     return solveFrm("S_%sRUNL",st);
     }
   if(a==MoveL) {
@@ -216,14 +228,18 @@ const Animation::Sequence* AnimationSolver::implSolveAnim(AnimationSolver::Anim 
     return solveFrm("T_%sRUNSTRAFER",st);
     }
   if(a==Anim::MoveBack) {
+    const Animation::Sequence* s = nullptr;
     if(bool(wlkMode & WalkBit::WM_Dive))
-      return solveFrm("S_DIVE");
-    if(bool(wlkMode & WalkBit::WM_Swim))
-      return solveFrm("S_SWIMB");
-    if(bool(wlkMode & WalkBit::WM_Sneak))
-      return solveFrm("S_%sSNEAKBL",st);
-    if(st==WeaponState::Fist)
-      return solveFrm("T_%sPARADEJUMPB",st);
+      s = solveFrm("S_DIVE");
+    else if(bool(wlkMode & WalkBit::WM_Swim))
+      s = solveFrm("S_SWIMB");
+    else if(bool(wlkMode & WalkBit::WM_Sneak))
+      s = solveFrm("S_%sSNEAKBL",st);
+    else if(st==WeaponState::Fist)
+      s = solveFrm("T_%sPARADEJUMPB",st);
+    if(s!=nullptr)
+      return s;
+    // This is bases on original game: if no move-back animation, even in water, game defaults to standard walk-back
     return solveFrm("T_%sJUMPB",st);
     }
   // Rotation
@@ -359,7 +375,7 @@ const Animation::Sequence *AnimationSolver::solveAnim(Interactive *inter, Animat
     }
   }
 
-const Animation::Sequence *AnimationSolver::solveFrm(std::string_view fview, WeaponState st) const {
+const Animation::Sequence* AnimationSolver::solveFrm(std::string_view fview, WeaponState st) const {
   char format[256] = {};
   std::snprintf(format,sizeof(format),"%.*s",int(fview.size()),fview.data());
 
@@ -376,19 +392,19 @@ const Animation::Sequence *AnimationSolver::solveFrm(std::string_view fview, Wea
   std::snprintf(name,sizeof(name),format,weapon[int(st)],weapon[int(st)]);
   if(auto ret=solveFrm(name))
     return ret;
-  std::snprintf(name,sizeof(name),format,"");
+  std::snprintf(name,sizeof(name),format,"","");
   if(auto ret=solveFrm(name))
     return ret;
-  std::snprintf(name,sizeof(name),format,"FIST");
+  std::snprintf(name,sizeof(name),format,"FIST","");
   return solveFrm(name);
   }
 
-const Animation::Sequence* AnimationSolver::solveMag(std::string_view fview, const std::string &spell) const {
+const Animation::Sequence* AnimationSolver::solveMag(std::string_view fview, std::string_view spell) const {
   char format[256] = {};
   std::snprintf(format,sizeof(format),"%.*s",int(fview.size()),fview.data());
 
   char name[128]={};
-  std::snprintf(name,sizeof(name),format,spell.c_str());
+  std::snprintf(name,sizeof(name),format,std::string(spell).c_str()); //FIXME
   return solveFrm(name);
   }
 
@@ -405,7 +421,7 @@ void AnimationSolver::invalidateCache() {
 const Animation::Sequence* AnimationSolver::solveNext(const Animation::Sequence& sq) const {
   if(sq.next.empty())
     return nullptr;
-  const char* name = sq.next.c_str();
+  std::string_view name = sq.next;
   for(size_t i=overlay.size();i>0;){
     --i;
     if(overlay[i].skeleton->animation()==sq.owner && sq.nextPtr!=nullptr)

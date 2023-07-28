@@ -2,6 +2,7 @@
 
 #include <Tempest/Log>
 
+#include "game/definitions/fightaidefinitions.h"
 #include "world/objects/npc.h"
 #include "world/objects/item.h"
 #include "gothic.h"
@@ -25,11 +26,8 @@ void FightAlgo::save(Serialize &fout) {
   }
 
 void FightAlgo::fillQueue(Npc &npc, Npc &tg, GameScript& owner) {
-  auto& ai = Gothic::fai()[size_t(npc.handle()->fight_tactic)];
+  auto& ai = Gothic::fai()[size_t(npc.handle().fight_tactic)];
   auto  ws = npc.weaponState();
-
-  if(ws==WeaponState::NoWeapon)
-    return;
 
   if(hitFlg) {
     hitFlg = false;
@@ -49,18 +47,18 @@ void FightAlgo::fillQueue(Npc &npc, Npc &tg, GameScript& owner) {
 
   if(ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H) {
     if(isInWRange(npc,tg,owner)) {
-      if(npc.bodyStateMasked()==BS_RUN && focus)
-        if(fillQueue(owner,ai.my_w_runto))
-          return;
       if(focus)
         if(fillQueue(owner,ai.my_w_focus))
+          return;
+      if(focus && npc.bodyStateMasked()==BS_RUN)
+        if(fillQueue(owner,ai.my_w_runto))
           return;
       if(fillQueue(owner,ai.my_w_nofocus))
         return;
       }
 
     if(isInGRange(npc,tg,owner)) {
-      if(npc.bodyStateMasked()==BS_RUN && focus)
+      if(focus && npc.bodyStateMasked()==BS_RUN)
         if(fillQueue(owner,ai.my_g_runto))
           return;
       if(focus)
@@ -86,112 +84,118 @@ void FightAlgo::fillQueue(Npc &npc, Npc &tg, GameScript& owner) {
   fillQueue(owner,ai.my_w_nofocus);
   }
 
-bool FightAlgo::fillQueue(GameScript& owner,const Daedalus::GEngineClasses::C_FightAI &src) {
+bool FightAlgo::fillQueue(GameScript& owner,const phoenix::c_fight_ai &src) {
   uint32_t sz=0;
-  for(size_t i=0;i<Daedalus::GEngineClasses::MAX_MOVE;++i){
-    if(src.move[i]==0)
+  for(size_t i=0;i<phoenix::c_fight_ai::move_count;++i){
+    if(src.move[i]==phoenix::c_fight_ai_move::nop)
       break;
     sz++;
     }
   if(sz==0)
     return false;
-  queueId = src.move[owner.rand(sz)];
-  return queueId!=0;
+  queueId = phoenix::c_fight_ai_move(src.move[owner.rand(sz)]);
+  return queueId!=phoenix::c_fight_ai_move::nop;
   }
 
 FightAlgo::Action FightAlgo::nextFromQueue(Npc& npc, Npc& tg, GameScript& owner) {
+  using phoenix::c_fight_ai_move;
+
   if(tr[0]==MV_NULL) {
     switch(queueId) {
-      case Daedalus::GEngineClasses::MOVE_TURN:
-      case Daedalus::GEngineClasses::MOVE_RUN:{
-        if(isInGRange(npc,tg,owner))
-          tr[0] = MV_MOVEA; else
-          tr[0] = MV_MOVEG;
+      case c_fight_ai_move::turn:
+        if(!isInGRange(npc,tg,owner))
+          tr[0] = MV_TURNG; else
+          tr[0] = MV_TURNA;
+        break;
+      case c_fight_ai_move::run:{
+        if(!isInGRange(npc,tg,owner))
+          tr[0] = MV_MOVEG; else
+          tr[0] = MV_MOVEA;
         break;
         }
-      case Daedalus::GEngineClasses::MOVE_RUNBACK:{
+      case c_fight_ai_move::run_back:{
         tr[0] = MV_NULL; //TODO
         break;
         }
-      case Daedalus::GEngineClasses::MOVE_JUMPBACK:{
+      case c_fight_ai_move::jump_back:{
         tr[0] = MV_JUMPBACK;
         break;
         }
-      case Daedalus::GEngineClasses::MOVE_STRAFE:{
+      case c_fight_ai_move::strafe:{
         tr[0] = owner.rand(2) ? MV_STRAFEL : MV_STRAFER;
         break;
         }
-      case Daedalus::GEngineClasses::MOVE_ATTACK:{
-        tr[0] = MV_ATACK;
+      case c_fight_ai_move::attack:{
+        tr[0] = MV_ATTACK;
         break;
         }
-      case Daedalus::GEngineClasses::MOVE_SIDEATTACK:{
-        tr[0] = MV_ATACKL;
-        tr[1] = MV_ATACKR;
+      case c_fight_ai_move::attack_side:{
+        tr[0] = MV_ATTACKL;
+        tr[1] = MV_ATTACKR;
         break;
         }
-      case Daedalus::GEngineClasses::MOVE_FRONTATTACK:{
-        tr[0] = owner.rand(2) ? MV_ATACKL : MV_ATACKR;
-        tr[1] = MV_ATACK;
+      case c_fight_ai_move::attack_front:{
+        tr[0] = owner.rand(2) ? MV_ATTACKL : MV_ATTACKR;
+        tr[1] = MV_ATTACK;
         break;
         }
-      case Daedalus::GEngineClasses::MOVE_TRIPLEATTACK:{
+      case c_fight_ai_move::attack_triple:{
         if(owner.rand(2)){
-          tr[0] = MV_ATACK;
-          tr[1] = MV_ATACKR;
-          tr[2] = MV_ATACKL;
+          tr[0] = MV_ATTACK;
+          tr[1] = MV_ATTACKR;
+          tr[2] = MV_ATTACKL;
           } else {
-          tr[0] = MV_ATACKL;
-          tr[1] = MV_ATACKR;
-          tr[2] = MV_ATACK;
+          tr[0] = MV_ATTACKL;
+          tr[1] = MV_ATTACKR;
+          tr[2] = MV_ATTACK;
           }
         break;
         }
-      case Daedalus::GEngineClasses::MOVE_WHIRLATTACK:{
-        tr[0] = MV_ATACKL;
-        tr[1] = MV_ATACKR;
-        tr[2] = MV_ATACKL;
-        tr[3] = MV_ATACKR;
+      case c_fight_ai_move::attack_whirl:{
+        tr[0] = MV_ATTACKL;
+        tr[1] = MV_ATTACKR;
+        tr[2] = MV_ATTACKL;
+        tr[3] = MV_ATTACKR;
         break;
         }
-      case Daedalus::GEngineClasses::MOVE_MASTERATTACK:{
-        tr[0] = MV_ATACKL;
-        tr[1] = MV_ATACKR;
-        tr[2] = MV_ATACK;
-        tr[3] = MV_ATACK;
-        tr[4] = MV_ATACK;
-        tr[5] = MV_ATACK;
+      case c_fight_ai_move::attack_master:{
+        tr[0] = MV_ATTACKL;
+        tr[1] = MV_ATTACKR;
+        tr[2] = MV_ATTACK;
+        tr[3] = MV_ATTACK;
+        tr[4] = MV_ATTACK;
+        tr[5] = MV_ATTACK;
         break;
         }
-      case Daedalus::GEngineClasses::MOVE_TURNTOHIT:{
+      case c_fight_ai_move::turn_to_hit:{
         tr[0] = MV_TURN2HIT;
         break;
         }
-      case Daedalus::GEngineClasses::MOVE_PARADE:{
+      case c_fight_ai_move::parry:{
         tr[0] = MV_BLOCK;
         break;
         }
-      case Daedalus::GEngineClasses::MOVE_STANDUP:{
+      case c_fight_ai_move::stand_up:{
         break;
         }
-      case Daedalus::GEngineClasses::MOVE_WAIT:
-      case Daedalus::GEngineClasses::MOVE_WAIT_EXT:{
+      case c_fight_ai_move::wait:
+      case c_fight_ai_move::wait_ext:{
         tr[0] = MV_WAIT;
         break;
         }
-      case Daedalus::GEngineClasses::MOVE_WAIT_LONGER:{
+      case c_fight_ai_move::wait_longer:{
         tr[0] = MV_WAITLONG;
         break;
         }
       default: {
-        static std::unordered_set<int32_t> inst;
+        static std::set<c_fight_ai_move> inst;
         if(inst.find(queueId)==inst.end()) {
-          Tempest::Log::d("unrecognized FAI instruction: ",queueId);
+          Tempest::Log::d("unrecognized FAI instruction: ", int(queueId));
           inst.insert(queueId);
           }
         }
       }
-    queueId=Daedalus::GEngineClasses::Move(0);
+    queueId=phoenix::c_fight_ai_move::nop;
     }
   return tr[0];
   }
@@ -202,7 +206,7 @@ bool FightAlgo::hasInstructions() const {
 
 bool FightAlgo::fetchInstructions(Npc &npc, Npc &tg, GameScript& owner) {
   fillQueue(npc,tg,owner);
-  if(queueId==0)
+  if(queueId==phoenix::c_fight_ai_move::nop)
     return false;
   nextFromQueue(npc,tg,owner);
   return true;
@@ -215,7 +219,7 @@ void FightAlgo::consumeAction() {
   }
 
 void FightAlgo::onClearTarget() {
-  queueId = Daedalus::GEngineClasses::Move(0);
+  queueId = phoenix::c_fight_ai_move::nop;
   tr[0]   = MV_NULL;
   }
 
@@ -232,7 +236,7 @@ float FightAlgo::baseDistance(const Npc& npc, const Npc& tg,  GameScript &owner)
   return baseTg + baseNpc;
   }
 
-float FightAlgo::prefferedAtackDistance(const Npc& npc, const Npc& tg,  GameScript &owner) const {
+float FightAlgo::prefferedAttackDistance(const Npc& npc, const Npc& tg,  GameScript &owner) const {
   auto&  gv      = owner.guildVal();
   float  baseTg  = float(gv.fight_range_base[tg .guild()]);
   float  baseNpc = float(gv.fight_range_base[npc.guild()]);
@@ -247,23 +251,26 @@ float FightAlgo::prefferedGDistance(const Npc& npc, const Npc& tg, GameScript &o
   return float(baseTg + baseNpc + float(gv.fight_range_g[gl])) + weaponRange(owner,npc);
   }
 
-bool FightAlgo::isInAtackRange(const Npc &npc,const Npc &tg, GameScript &owner) const {
-  auto& gv     = owner.guildVal();
-  float baseTg = float(gv.fight_range_base[tg .guild()]);
+bool FightAlgo::isInAttackRange(const Npc &npc,const Npc &tg, GameScript &owner) const {
+  // tested in vanilla on Bloofly's:
+  //  60 weapon range (Spiked club) is not enough to hit
+  //  70 weapon range (Rusty Sword) is good to hit
   auto  dist   = npc.qDistTo(tg);
-  auto  pd     = baseTg + prefferedAtackDistance(npc,tg,owner);
+  auto  pd     = prefferedAttackDistance(npc,tg,owner);
+  if(npc.hasState(BS_RUN))
+    pd += 20; // padding, for wolf
   return (dist<=pd*pd);
   }
 
 bool FightAlgo::isInWRange(const Npc& npc, const Npc& tg, GameScript& owner) const {
   auto dist = npc.qDistTo(tg);
-  auto pd   = prefferedAtackDistance(npc,tg,owner);
+  auto pd   = prefferedAttackDistance(npc,tg,owner);
   return (dist<=pd*pd);
   }
 
 bool FightAlgo::isInGRange(const Npc &npc, const Npc &tg, GameScript &owner) const {
-  auto dist = npc.qDistTo(tg);
-  auto pd   = prefferedGDistance(npc,tg,owner);
+  auto  dist    = npc.qDistTo(tg);
+  auto  pd      = prefferedGDistance(npc,tg,owner);
   return (dist<=pd*pd);
   }
 
@@ -286,6 +293,7 @@ float FightAlgo::weaponRange(GameScript &owner, const Npc &npc) {
   auto& gv  = owner.guildVal();
   auto  w   = npc.inventory().activeWeapon();
   int   add = w ? w->swordLength() : 0;
+  auto  bR  = Gothic::inst().version().game==2 ? ReferenceBowRangeG2 : ReferenceBowRangeG1;
 
   switch(npc.weaponState()) {
     case WeaponState::W1H:
@@ -296,9 +304,8 @@ float FightAlgo::weaponRange(GameScript &owner, const Npc &npc) {
     case WeaponState::Fist:
       return float(gv.fight_range_fist[gl]);
     case WeaponState::Bow:
-      return float((MaxBowRange*npc.hitChanse(TALENT_BOW))/100);
     case WeaponState::CBow:
-      return float((MaxBowRange*npc.hitChanse(TALENT_CROSSBOW))/100);
+      return float(bR);
     case WeaponState::Mage:
       return float(MaxMagRange);
     }

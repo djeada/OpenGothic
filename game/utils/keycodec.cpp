@@ -57,10 +57,12 @@ std::initializer_list<KeyCodec::K_Key> KeyCodec::keys = {
   {Tempest::Event::K_LControl, 0x1d00},
   {Tempest::Event::K_LShift,   0x2a00},
   {Tempest::Event::K_LAlt,     0x3800},
+  {Tempest::Event::K_LCommand, 0x4800},
   // Right
   {Tempest::Event::K_RControl, 0x9d00},
   {Tempest::Event::K_RShift,   0x3600},
   {Tempest::Event::K_RAlt,     0xb800},
+  {Tempest::Event::K_RCommand, 0x4801},
   };
 
 std::initializer_list<KeyCodec::M_Key> KeyCodec::mkeys = {
@@ -102,11 +104,11 @@ KeyCodec::KeyCodec() {
   setupSettings();
   }
 
-KeyCodec::Action KeyCodec::tr(Tempest::KeyEvent& e) const {
+KeyCodec::Action KeyCodec::tr(Tempest::KeyEvent const& e) const {
   int32_t code = keyToCode(e.key);
   if(e.key==Tempest::KeyEvent::K_ESCAPE)
     return Escape;
-  auto act = implTr(code);
+  auto act = implTr(code).action;
   if(act!=KeyCodec::Idle)
     return act;
   if(Tempest::Event::K_0<e.key && e.key<=Tempest::Event::K_9)
@@ -122,15 +124,19 @@ KeyCodec::Action KeyCodec::tr(Tempest::KeyEvent& e) const {
   return Idle;
   }
 
-KeyCodec::Action KeyCodec::tr(Tempest::MouseEvent& e) const {
+KeyCodec::Action KeyCodec::tr(Tempest::MouseEvent const& e) const {
   int32_t code = keyToCode(e.button);
-  auto act = implTr(code);
+  auto act = implTr(code).action;
   if(act!=KeyCodec::Idle)
     return act;
   return Idle;
   }
 
-void KeyCodec::set(const char* sec, const char* opt, int32_t code) {
+KeyCodec::Mapping KeyCodec::mapping(Tempest::KeyEvent const& e) const {
+  return implTr(keyToCode(e.key)).mapping;
+  }
+
+void KeyCodec::set(std::string_view sec, std::string_view opt, int32_t code) {
   for(auto i:allKeys) {
     const bool chg = i->is(code);
     if(i->k[0]==code)
@@ -153,10 +159,75 @@ void KeyCodec::set(const char* sec, const char* opt, int32_t code) {
   Gothic::settingsSetS(sec, opt, val);
   }
 
-void KeyCodec::setDefaultKeys(const char* preset) {
+void KeyCodec::setDefaultKeys(std::string_view preset) {
+  if(!Gothic::settingsHasSection(preset)) {
+    if(Gothic::inst().version().game==1) {
+      if(preset=="KEYSDEFAULT0")
+        setDefaultKeysG1(); else
+        setDefaultKeysG1Alt();
+      }
+    return;
+    }
+
   for(auto i:allKeys) {
     auto s = Gothic::settingsGetS(preset,i->key);
     Gothic::settingsSetS("KEYS",i->key,s);
+    *i = setup(i->key);
+    }
+  }
+
+void KeyCodec::setDefaultKeysG1() {
+  for(auto i:allKeys)
+    Gothic::settingsSetS("KEYS",i->key,"");
+
+  Gothic::settingsSetS("KEYS", "keyShowMap",     "3200");
+  Gothic::settingsSetS("KEYS", "keyEnd",         "0100");
+  Gothic::settingsSetS("KEYS", "keyUp",          "c800c700");
+  Gothic::settingsSetS("KEYS", "keyDown",        "d000cf00");
+  Gothic::settingsSetS("KEYS", "keyLeft",        "cb00d200");
+  Gothic::settingsSetS("KEYS", "keyRight",       "cd00c900");
+  Gothic::settingsSetS("KEYS", "keyStrafeLeft",  "d300");
+  Gothic::settingsSetS("KEYS", "keyStrafeRight", "d100");
+  Gothic::settingsSetS("KEYS", "keyAction",      "1d00");
+  Gothic::settingsSetS("KEYS", "keySlow",        "2a00");
+  Gothic::settingsSetS("KEYS", "keySMove",       "3800b800");
+  Gothic::settingsSetS("KEYS", "keyWeapon",      "3900");
+  Gothic::settingsSetS("KEYS", "keySneak",       "1e003700");
+  Gothic::settingsSetS("KEYS", "keyLook",        "52001300");
+  Gothic::settingsSetS("KEYS", "keyLookFP",      "53002100");
+  Gothic::settingsSetS("KEYS", "keyInventory",   "0f000e00");
+  Gothic::settingsSetS("KEYS", "keyShowStatus",  "1f003000");
+  Gothic::settingsSetS("KEYS", "keyShowLog",     "26003100");
+
+  for(auto i:allKeys) {
+    *i = setup(i->key);
+    }
+  }
+
+void KeyCodec::setDefaultKeysG1Alt() {
+  for(auto i:allKeys)
+    Gothic::settingsSetS("KEYS",i->key,"");
+
+  Gothic::settingsSetS("KEYS", "keyShowMap",     "3200");
+  Gothic::settingsSetS("KEYS", "keyEnd",         "0100");
+  Gothic::settingsSetS("KEYS", "keyUp",          "c8001100");
+  Gothic::settingsSetS("KEYS", "keyDown",        "d0001f00");
+  Gothic::settingsSetS("KEYS", "keyLeft",        "cb001000");
+  Gothic::settingsSetS("KEYS", "keyRight",       "cd001200");
+  Gothic::settingsSetS("KEYS", "keyStrafeLeft",  "d3001e00");
+  Gothic::settingsSetS("KEYS", "keyStrafeRight", "d1002000");
+  Gothic::settingsSetS("KEYS", "keyAction",      "1d00");
+  Gothic::settingsSetS("KEYS", "keySlow",        "2a00");
+  Gothic::settingsSetS("KEYS", "keySMove",       "3800b800");
+  Gothic::settingsSetS("KEYS", "keyWeapon",      "3900");
+  Gothic::settingsSetS("KEYS", "keySneak",       "2d003700");
+  Gothic::settingsSetS("KEYS", "keyLook",        "52001300");
+  Gothic::settingsSetS("KEYS", "keyLookFP",      "53002100");
+  Gothic::settingsSetS("KEYS", "keyInventory",   "0f000e00");
+  Gothic::settingsSetS("KEYS", "keyShowStatus",  "3000");
+  Gothic::settingsSetS("KEYS", "keyShowLog",     "3100");
+
+  for(auto i:allKeys) {
     *i = setup(i->key);
     }
   }
@@ -170,194 +241,179 @@ std::string KeyCodec::toCode(int32_t code) {
   return ret;
   }
 
-KeyCodec::Action KeyCodec::implTr(int32_t code) const {
-  if(keyEnd.is(code))
-    return Idle;
-  if(keyUp.is(code))
-    return Forward;
-  if(keyDown.is(code))
-    return Back;
-  if(keyLeft.is(code))
-    return RotateL;
-  if(keyRight.is(code))
-    return RotateR;
-  if(keyStrafeLeft.is(code))
-    return Left;
-  if(keyStrafeRight.is(code))
-    return Right;
+KeyCodec::ActionMapping KeyCodec::implTr(int32_t code) const {
+  if(auto m = keyEnd.mapping(code))
+    return { Idle, *m };
+  if(auto m = keyUp.mapping(code))
+    return { Forward, *m };
+  if(auto m = keyDown.mapping(code))
+    return { Back, *m };
+  if(auto m = keyLeft.mapping(code))
+    return { RotateL, *m };
+  if(auto m = keyRight.mapping(code))
+    return { RotateR, *m };
+  if(auto m = keyStrafeLeft.mapping(code))
+    return { Left, *m };
+  if(auto m = keyStrafeRight.mapping(code))
+    return { Right, *m };
 
-  if(keyAction.is(code))
-    return ActionGeneric;
-  if(keyActionLeft.is(code))
-    return ActionLeft;
-  if(keyActionRight.is(code))
-    return ActionRight;
-  if(keyParade.is(code))
-    return Parade;
+  if(auto m = keyAction.mapping(code))
+    return { ActionGeneric, *m };
+  if(auto m = keyActionLeft.mapping(code))
+    return { ActionLeft, *m };
+  if(auto m = keyActionRight.mapping(code))
+    return { ActionRight, *m };
+  if(auto m = keyParade.mapping(code))
+    return { Parade, *m };
 
-  if(keySlow.is(code))
-    return Walk;
-  if(keySMove.is(code))
-    return Jump;
+  if(auto m = keySlow.mapping(code))
+    return { Walk, *m };
+  if(auto m = keySMove.mapping(code))
+    return { Jump, *m };
 
-  if(keyWeapon.is(code))
-    return Weapon;
-  if(keySneak.is(code))
-    return Sneak;
+  if(auto m = keyWeapon.mapping(code))
+    return { Weapon, *m };
+  if(auto m = keySneak.mapping(code))
+    return { Sneak, *m };
 
-  if(keyLook.is(code))
-    return LookBack;
-  if(keyLookFP.is(code))
-    return FirstPerson;
+  if(auto m = keyLook.mapping(code))
+    return { LookBack, *m };
+  if(auto m = keyLookFP.mapping(code))
+    return { FirstPerson, *m };
 
-  if(keyInventory.is(code))
-    return Inventory;
-  if(keyShowStatus.is(code))
-    return Status;
-  if(keyShowLog.is(code))
-    return Log;
-  if(keyShowMap.is(code))
-    return Map;
+  if(auto m = keyInventory.mapping(code))
+    return { Inventory, *m };
+  if(auto m = keyShowStatus.mapping(code))
+    return { Status, *m };
+  if(auto m = keyShowLog.mapping(code))
+    return { Log, *m };
+  if(auto m = keyShowMap.mapping(code))
+    return { Map, *m };
+  if(auto m = keyHeal.mapping(code))
+    return { Heal, *m };
+  if(auto m = keyPotion.mapping(code))
+    return { Potion, *m };
 
-  return Idle;
+  // TODO: don't use "Primary" as a placeholder here.
+  return { Idle, Mapping::Primary };
   }
 
-void KeyCodec::keysStr(std::string_view keys, char buf[], size_t bufSz) {
+string_frm<64> KeyCodec::keysStr(std::string_view keys) {
   int32_t k0 = fetch(keys,0,4);
   int32_t k1 = fetch(keys,4,8);
 
   if(k0==0 && k1==0)
-    return;
+    return "";
 
-  char kbuf[2][128] = {};
-  bool hasK0 = keyToStr(k0,kbuf[0],128);
-  bool hasK1 = keyToStr(k1,kbuf[1],128);
-
-  if(!hasK0 || std::strcmp(kbuf[0],kbuf[1])==0){
-    std::snprintf(buf,bufSz,"%s",kbuf[1]);
-    return;
+  auto k0Str = keyToStr(k0);
+  auto k1Str = keyToStr(k1);
+  if(k0Str.empty() || std::string_view(k0Str)==k1Str){
+    return k1Str;
     }
-  if(!hasK1){
-    std::snprintf(buf,bufSz,"%s",kbuf[0]);
-    return;
+  if(k1Str.empty()){
+    return k0Str;
     }
 
-  std::snprintf(buf,bufSz,"%s, %s",kbuf[0],kbuf[1]);
+  return string_frm<64>(k0Str,", ",k1Str);
   }
 
-bool KeyCodec::keyToStr(int32_t k, char* buf, size_t bufSz) {
+string_frm<64> KeyCodec::keyToStr(int32_t k) {
   using namespace Tempest;
 
   for(auto& i:keys)
     if(k==i.code) {
-      keyToStr(i.k,buf,bufSz);
-      return true;
+      return keyToStr(i.k);
       }
   for(auto& i:mkeys)
     if(k==i.code) {
-      keyToStr(i.k,buf,bufSz);
-      return true;
+      return keyToStr(i.k);
       }
-  return false;
+  return "";
   }
 
-void KeyCodec::keyToStr(Tempest::Event::KeyType k, char* buf, size_t bufSz) {
+string_frm<64> KeyCodec::keyToStr(Tempest::Event::KeyType k) {
   if(Tempest::Event::K_0<=k && k<=Tempest::Event::K_9) {
-    buf[0] = char('0' + (k-Tempest::Event::K_0));
-    return;
+    auto c = char('0' + (k-Tempest::Event::K_0));
+    return string_frm<64>(c);
     }
   if(Tempest::Event::K_A<=k && k<=Tempest::Event::K_Z) {
-    buf[0] = char('A' + (k-Tempest::Event::K_A));
-    return;
+    auto c = char('A' + (k-Tempest::Event::K_A));
+    return string_frm<64>(c);
     }
 
   if(k==Tempest::Event::K_Up) {
-    std::strncpy(buf,"CURSOR UP",bufSz);
-    return;
+    return "CURSOR UP";
     }
   if(k==Tempest::Event::K_Down) {
-    std::strncpy(buf,"CURSOR DOWN",bufSz);
-    return;
+    return "CURSOR DOWN";
     }
   if(k==Tempest::Event::K_Left) {
-    std::strncpy(buf,"CURSOR LEFT",bufSz);
-    return;
+    return "CURSOR LEFT";
     }
   if(k==Tempest::Event::K_Right) {
-    std::strncpy(buf,"CURSOR RIGHT",bufSz);
-    return;
+    return "CURSOR RIGHT";
     }
   if(k==Tempest::Event::K_Tab) {
-    std::strncpy(buf,"TAB",bufSz);
-    return;
+    return "TAB";
     }
   if(k==Tempest::Event::K_Back) {
-    std::strncpy(buf,"BACKSPACE",bufSz);
-    return;
+    return "BACKSPACE";
     }
   if(k==Tempest::Event::K_Space) {
-    std::strncpy(buf,"SPACE",bufSz);
-    return;
+    return "SPACE";
     }
   if(k==Tempest::Event::K_LControl) {
-    std::strncpy(buf,"LEFT CONTROL",bufSz);
-    return;
+    return "LEFT CONTROL";
     }
   if(k==Tempest::Event::K_RControl) {
-    std::strncpy(buf,"RIGHT CONTROL",bufSz);
-    return;
+    return "RIGHT CONTROL";
     }
   if(k==Tempest::Event::K_Delete) {
-    std::strncpy(buf,"DELETE",bufSz);
-    return;
+    return "DELETE";
     }
   if(k==Tempest::Event::K_LShift) {
-    std::strncpy(buf,"LEFT SHIFT",bufSz);
-    return;
+    return "LEFT SHIFT";
     }
   if(k==Tempest::Event::K_RShift) {
-    std::strncpy(buf,"RIGHT SHIFT",bufSz);
-    return;
+    return "RIGHT SHIFT";
     }
   if(k==Tempest::Event::K_CapsLock) {
-    std::strncpy(buf,"CAPS LOCK",bufSz);
-    return;
+    return "CAPS LOCK";
     }
   if(k==Tempest::Event::K_LAlt) {
-    std::strncpy(buf,"LEFT ALT", bufSz);
-    return;
+    return "LEFT ALT";
     }
   if(k==Tempest::Event::K_RAlt) {
-    std::strncpy(buf,"RIGHT ALT", bufSz);
-    return;
+    return "RIGHT ALT";
+    }
+  if(k==Tempest::Event::K_LCommand) {
+    return "LEFT COMMAND";
+    }
+  if(k==Tempest::Event::K_RCommand) {
+    return "RIGHT COMMAND";
     }
 
-  buf[0] = '?';
+  return string_frm<64>('?');
   }
 
-void KeyCodec::keyToStr(Tempest::Event::MouseButton k, char* buf, size_t bufSz) {
+string_frm<64> KeyCodec::keyToStr(Tempest::Event::MouseButton k) {
   if(k==Tempest::Event::ButtonLeft) {
-    std::strncpy(buf,"MOUSE LEFT",bufSz);
-    return;
+    return "MOUSE LEFT";
     }
   if(k==Tempest::Event::ButtonMid) {
-    std::strncpy(buf,"MOUSE MID",bufSz);
-    return;
+    return "MOUSE MID";
     }
   if(k==Tempest::Event::ButtonRight) {
-    std::strncpy(buf,"MOUSE RIGHT",bufSz);
-    return;
+    return "MOUSE RIGHT";
     }
   if(k==Tempest::Event::ButtonForward) {
-    std::strncpy(buf,"MOUSE X2",bufSz);
-    return;
+    return "MOUSE X2";
     }
   if(k==Tempest::Event::ButtonBack) {
-    std::strncpy(buf,"MOUSE X1",bufSz);
-    return;
+    return "MOUSE X1";
     }
 
-  buf[0] = '?';
+  return string_frm<64>('?');
   }
 
 int32_t KeyCodec::keyToCode(Tempest::Event::KeyType t) {

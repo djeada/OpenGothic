@@ -7,10 +7,10 @@
 #include "ui/documentmenu.h"
 #include "ui/chapterscreen.h"
 #include "game/gamescript.h"
+#include "camera.h"
 #include "gamemusic.h"
 #include "gametime.h"
 
-class Camera;
 class World;
 class WorldView;
 class Npc;
@@ -31,12 +31,13 @@ class GameSession final {
     GameSession(Serialize&  fin);
     ~GameSession();
 
-    void         save(Serialize& fout, const char *name, const Tempest::Pixmap &screen);
+    void         save(Serialize& fout, std::string_view name, const Tempest::Pixmap &screen);
+    void         setupSettings();
 
     void         setWorld(std::unique_ptr<World> &&w);
     auto         clearWorld() -> std::unique_ptr<World>;
 
-    void         changeWorld(const std::string &world, const std::string &wayPoint);
+    void         changeWorld(std::string_view world, std::string_view wayPoint);
     void         exitSession();
 
     auto         version() const -> const VersionInfo&;
@@ -53,7 +54,7 @@ class GameSession final {
     auto         loadSound(const SoundFx&        fx, bool& looped)  -> Tempest::SoundEffect;
 
     Npc*         player();
-    void         updateListenerPos(Npc& npc);
+    void         updateListenerPos(const Camera::ListenerPos& lpos);
 
     gtime        time() const { return  wrldTime; }
     void         setTime(gtime t);
@@ -62,12 +63,12 @@ class GameSession final {
 
     void         updateAnimation(uint64_t dt);
 
-    auto         updateDialog(const GameScript::DlgChoise &dlg, Npc &player, Npc &npc) -> std::vector<GameScript::DlgChoise>;
-    void         dialogExec(const GameScript::DlgChoise &dlg, Npc &player, Npc &npc);
+    auto         updateDialog(const GameScript::DlgChoice &dlg, Npc &player, Npc &npc) -> std::vector<GameScript::DlgChoice>;
+    void         dialogExec(const GameScript::DlgChoice &dlg, Npc &player, Npc &npc);
 
-    const Daedalus::ZString& messageFromSvm(const Daedalus::ZString& id, int voice) const;
-    const Daedalus::ZString& messageByName (const Daedalus::ZString& id) const;
-    uint32_t                 messageTime   (const Daedalus::ZString& id) const;
+    std::string_view         messageFromSvm(std::string_view id, int voice) const;
+    std::string_view         messageByName (std::string_view id) const;
+    uint32_t                 messageTime   (std::string_view id) const;
 
     AiOuputPipe* openDlgOuput(Npc &player, Npc &npc);
     bool         aiIsDlgFinished();
@@ -84,10 +85,10 @@ class GameSession final {
       std::vector<uint8_t> storage;
       };
 
-    bool         isWorldKnown(const std::string& name) const;
+    bool         isWorldKnown(std::string_view name) const;
     void         initScripts(bool firstTime);
-    auto         implChangeWorld(std::unique_ptr<GameSession> &&game, const std::string &world, const std::string &wayPoint) -> std::unique_ptr<GameSession>;
-    auto         findStorage(const std::string& name) -> const WorldStateStorage&;
+    auto         implChangeWorld(std::unique_ptr<GameSession> &&game, std::string_view world, std::string_view wayPoint) -> std::unique_ptr<GameSession>;
+    auto         findStorage(std::string_view name) -> const WorldStateStorage&;
 
     Tempest::SoundDevice           sound;
 

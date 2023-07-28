@@ -81,8 +81,10 @@ enum {
   };
 
 enum {
-  MaxBowRange = 3500, // from Focus_Ranged
-  MaxMagRange = 3500,
+  ReferenceBowRangeG1 = 2000,
+  ReferenceBowRangeG2 = 1500,
+  MaxBowRange         = 4500,
+  MaxMagRange         = 3500, // from Focus_Ranged
   };
 
 enum BodyState:uint32_t {
@@ -257,17 +259,6 @@ inline SensesBit operator | (SensesBit a,const SensesBit& b){
   return SensesBit(uint8_t(a)|uint8_t(b));
   }
 
-enum MenuItem : int32_t {
-  MENU_ITEM_UNDEF     = 0,
-  MENU_ITEM_TEXT      = 1,
-  MENU_ITEM_SLIDER    = 2,
-  MENU_ITEM_INPUT     = 3,
-  MENU_ITEM_CURSOR    = 4,
-  MENU_ITEM_CHOICEBOX = 5,
-  MENU_ITEM_BUTTON    = 6,
-  MENU_ITEM_LISTBOX   = 7,
-  };
-
 
 enum ItmFlags : uint32_t {
   ITM_CAT_NONE   = 1 << 0,
@@ -300,7 +291,7 @@ enum ItmFlags : uint32_t {
 
 enum Action:uint32_t {
   AI_None  =0,
-  AI_LookAt,
+  AI_LookAtNpc,
   AI_StopLookAt,
   AI_RemoveWeapon,
   AI_TurnToNpc,
@@ -321,10 +312,10 @@ enum Action:uint32_t {
   AI_UseItem,
   AI_UseItemToState,
   AI_Teleport,
-  AI_DrawWeaponMele,
+  AI_DrawWeaponMelee,
   AI_DrawWeaponRange,
   AI_DrawSpell,
-  AI_Atack,
+  AI_Attack,
   AI_Flee,
   AI_Dodge,
   AI_UnEquipWeapons,
@@ -347,6 +338,7 @@ enum Action:uint32_t {
   AI_PointAt,
   AI_StopPointAt,
   AI_PrintScreen,
+  AI_LookAt
   };
 
 
@@ -446,3 +438,13 @@ enum Protection : uint8_t {
   PROT_FALL    = 7,
   PROT_MAX     = 8
   };
+
+inline const char* MaterialGroupNames[] = {
+  "UNDEF",
+  "METAL",
+  "STONE",
+  "WOOD",
+  "EARTH",
+  "WATER",
+  "SNOW",
+};

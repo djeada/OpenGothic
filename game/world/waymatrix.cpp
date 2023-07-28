@@ -4,15 +4,14 @@
 #include <algorithm>
 #include <limits>
 
-#include "game/movealgo.h"
-#include "utils/gthfont.h"
 #include "utils/dbgpainter.h"
 #include "utils/versioninfo.h"
+#include "world/objects/interactive.h"
 #include "world.h"
 
 using namespace Tempest;
 
-WayMatrix::WayMatrix(World &world, const ZenLoad::zCWayNetData &dat)
+WayMatrix::WayMatrix(World &world, const phoenix::way_net &dat)
   :world(world) {
   // scripting doc says 20m, but number seems to be incorrect
   if(world.version().game==2) {
@@ -55,18 +54,20 @@ void WayMatrix::buildIndex() {
     return a->x<b->x;
     });
 
-  for(auto& i:edges){
-    if(i.first<wayPoints.size() && i.second<wayPoints.size()){
-      auto& a = wayPoints[i.first ];
-      auto& b = wayPoints[i.second];
+  for(auto& i:edges) {
+    if(i.a<wayPoints.size() && i.b<wayPoints.size()) {
+      auto& a = wayPoints[i.a];
+      auto& b = wayPoints[i.b];
 
       a.connect(b);
       b.connect(a);
       }
     }
+
+  calculateLadderPoints();
   }
 
-const WayPoint *WayMatrix::findWayPoint(const Vec3& at, const Vec3& to, const std::function<bool(const WayPoint&)>& filter) const {
+const WayPoint *WayMatrix::findWayPoint(const Vec3& at, const std::function<bool(const WayPoint&)>& filter) const {
   const WayPoint* ret =nullptr;
   float           dist=std::numeric_limits<float>::max();
   for(auto& w:wayPoints) {
@@ -75,13 +76,9 @@ const WayPoint *WayMatrix::findWayPoint(const Vec3& at, const Vec3& to, const st
     auto  dp0 = at-w.position();
     float l0  = dp0.quadLength();
 
-    auto  dp1 = to-w.position();
-    float l1  = dp1.quadLength();
-
-    float l = l0 + std::min<float>(l1,150*150);
-    if(l<dist){
+    if(l0<dist){
       ret  = &w;
-      dist = l;
+      dist = l0;
       }
     }
   return ret;
@@ -145,12 +142,12 @@ const WayPoint* WayMatrix::findPoint(std::string_view name, bool inexact) const 
   if(name.empty())
     return nullptr;
   for(auto& i:startPoints)
-    if(name==i.name.c_str())
+    if(name==i.name)
       return &i;
   auto it = std::lower_bound(indexPoints.begin(),indexPoints.end(),name,[](const WayPoint* a, std::string_view b){
-      return a->name.c_str()<b;
+      return a->name<b;
     });
-  if(it!=indexPoints.end() && name==(*it)->name.c_str())
+  if(it!=indexPoints.end() && name==(*it)->name)
     return *it;
   if(!inexact)
     return nullptr;
@@ -184,8 +181,47 @@ void WayMatrix::marchPoints(DbgPainter &p) const {
 
 void WayMatrix::adjustWaypoints(std::vector<WayPoint> &wp) {
   for(auto& w:wp) {
-    w.y = world.physic()->landRay(w.position()).v.y;
+    auto ray = world.physic()->landRay(w.position());
+    if(ray.hasCol)
+      w.y = ray.v.y;
     indexPoints.push_back(&w);
+    }
+  }
+
+void WayMatrix::calculateLadderPoints() {
+  static const float dist = 100.f;
+  for(uint32_t i=0;;++i) {
+    auto inter = world.mobsiById(i);
+    if(inter==nullptr)
+      break;
+    if(!inter->isLadder())
+      continue;
+    auto box = inter->bBox();
+    for(auto& e:edges) {
+      if(e.a>=wayPoints.size() || e.b>=wayPoints.size() || e.a==e.b)
+        continue;
+      auto& a     = wayPoints[e.a], b    = wayPoints[e.b];
+      Vec3  posA  = a.position(),   posB = b.position();
+      Vec3  dTopA = box[1] - posA;
+      Vec3  dBotA = box[0] - posA;
+      Vec3  dBA   = posB - posA;
+      if(dBA.x<0)
+        std::swap(dTopA.x,dBotA.x);
+      if(dBA.y<0)
+        std::swap(dTopA.y,dBotA.y);
+      if(dBA.z<0)
+        std::swap(dTopA.z,dBotA.z);
+      float max = std::min({dTopA.x/dBA.x,dTopA.y/dBA.y,dTopA.z/dBA.z});
+      float min = std::max({dBotA.x/dBA.x,dBotA.y/dBA.y,dBotA.z/dBA.z});
+      if(max<min || max<0.f || min>1.f)
+        continue;
+      float dy = 0.5f * std::abs(box[0].y+box[1].y-posA.y-posB.y);
+      if(dy<dist) {
+        wayPoints[e.a].ladder = inter;
+        wayPoints[e.b].ladder = inter;
+        break;
+        }
+      }
     }
   }
 
@@ -242,7 +278,10 @@ const WayPoint *WayMatrix::findFreePoint(float x, float y, float z, const FpInde
   return ret;
   }
 
-WayPath WayMatrix::wayTo(const WayPoint& begin, const WayPoint& end) const {
+WayPath WayMatrix::wayTo(const WayPoint** begin, size_t beginSz, const Tempest::Vec3 exactBegin, const WayPoint& end) const {
+  if(beginSz==0)
+    return WayPath();
+
   intptr_t endId = std::distance<const WayPoint*>(&wayPoints[0],&end);
   if(endId<0 || size_t(endId)>=wayPoints.size()){
     if(end.name.find("FP_")==0) {
@@ -259,17 +298,26 @@ WayPath WayMatrix::wayTo(const WayPoint& begin, const WayPoint& end) const {
     for(auto& i:wayPoints)
       i.pathGen=0;
     }
-  begin.pathLen = 0;
-  begin.pathGen = pathGen;
 
   std::vector<const WayPoint*> *front=&stk[0], *back=&stk[1];
   stk[0].clear();
   stk[1].clear();
 
-  front->push_back(&begin);
+  end.pathLen = 0;
+  end.pathGen = pathGen;
+  front->push_back(&end);
 
-  while(end.pathGen!=pathGen && front->size()>0){
-    for(auto& wp:*front){
+  while(front->size()>0) {
+    bool done = true;
+    for(size_t i=0; i<beginSz; ++i)
+      if(begin[i]->pathGen!=pathGen) {
+        done = false;
+        break;
+        }
+    if(done)
+      break;
+
+    for(auto& wp:*front) {
       int32_t l0 = wp->pathLen;
 
       for(auto i:wp->connections()){
@@ -286,10 +334,18 @@ WayPath WayMatrix::wayTo(const WayPoint& begin, const WayPoint& end) const {
     back->clear();
     }
 
+  const WayPoint* first = begin[0];
+  for(size_t i=0; i<beginSz; ++i) {
+    int32_t iLen = begin[i]->pathLen + int((exactBegin - begin[i]->position()).length());
+    int32_t fLen = first   ->pathLen + int((exactBegin - first   ->position()).length());
+    if(iLen<fLen)
+      first = begin[i];
+    }
+
   WayPath ret;
-  ret.add(end);
-  const WayPoint* current = &end;
-  while(current!=&begin) {
+  ret.add(*first);
+  const WayPoint* current = first;
+  while(current!=&end) {
     int32_t l0 = current->pathLen, l1=l0;
 
     const WayPoint* next=nullptr;
@@ -305,5 +361,6 @@ WayPath WayMatrix::wayTo(const WayPoint& begin, const WayPoint& end) const {
     current=next;
     }
 
+  ret.reverse();
   return ret;
   }

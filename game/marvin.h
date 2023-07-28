@@ -11,8 +11,8 @@ class Marvin {
 
     Tempest::Signal<void(std::string_view)> print;
 
-    void autoComplete(std::string& v);
-    bool exec(const std::string& v);
+    bool autoComplete(std::string& v);
+    bool exec(std::string_view v);
 
   private:
     enum CmdType {
@@ -24,14 +24,26 @@ class Marvin {
       C_PrintVar,
 
       // rendering
-      C_ToogleFrame,
+      C_ToggleFrame,
+      C_ToggleTime,
+      // game
+      C_ToggleDesktop,
       // npc
       C_CheatFull,
+      C_CheatGod,
+      C_Kill,
       // camera
       C_CamAutoswitch,
       C_CamMode,
-      C_ToogleCamDebug,
-      C_ToogleCamera,
+      C_ToggleCamDebug,
+      C_ToggleCamera,
+      C_ToggleInertia,
+
+      C_AiGoTo,
+      C_GoToPos,
+      C_GoToWayPoint,
+
+      C_SetTime,
 
       C_Insert,
       };
@@ -59,6 +71,7 @@ class Marvin {
 
     bool   addItemOrNpcBySymbolName(World* world, std::string_view name, const Tempest::Vec3& at);
     bool   printVariable           (World* world, std::string_view name);
+    bool   setTime                 (World& world, std::string_view hh, std::string_view mm);
 
     std::vector<Cmd> cmd;
   };

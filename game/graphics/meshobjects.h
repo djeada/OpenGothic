@@ -33,8 +33,12 @@ class MeshObjects final {
       public:
         Node(Node&&)=default;
 
-        void draw(Tempest::Encoder<Tempest::CommandBuffer>& p, uint8_t fId) const;
-        const Bounds& bounds() const;
+        const Bounds&      bounds() const;
+        const Material&    material() const;
+        Tempest::Matrix4x4 position() const;
+        const StaticMesh*  mesh() const;
+
+        std::pair<uint32_t,uint32_t> meshSlice() const;
 
       private:
         Node(const Item* it):it(it){}
@@ -58,7 +62,7 @@ class MeshObjects final {
         void   setPose     (const Tempest::Matrix4x4& obj, const Pose& p);
         void   setAsGhost  (bool g);
         void   setFatness  (float f);
-        void   setWind     (ZenLoad::AnimMode m, float intensity);
+        void   setWind     (phoenix::animation_mode m, float intensity);
         void   startMMAnim (std::string_view anim, float intensity, uint64_t timeUntil);
 
         bool   isEmpty()    const { return subCount==0; }
@@ -90,6 +94,6 @@ class MeshObjects final {
                                             int32_t texVar, int32_t teethTex, int32_t bodyColor,
                                             bool staticDraw);
 
-    const Tempest::Texture2d*       solveTex(const Tempest::Texture2d* def,const std::string& format,
+    const Tempest::Texture2d*       solveTex(const Tempest::Texture2d* def, std::string_view format,
                                              int32_t v,int32_t c);
   };

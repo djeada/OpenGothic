@@ -1,8 +1,13 @@
 #include "globaleffects.h"
 
+#include <Tempest/Log>
+#include <charconv>
+
 #include "world/objects/globalfx.h"
 #include "world/world.h"
 #include "graphics/visualfx.h"
+
+using namespace Tempest;
 
 GlobalEffects::GlobalEffects(World& owner):owner(owner){
   }
@@ -84,7 +89,7 @@ void GlobalEffects::scrBlend(Tempest::Painter& p, const Tempest::Rect& rect) {
     }
   }
 
-GlobalFx GlobalEffects::startEffect(const Daedalus::ZString& what, uint64_t len, const Daedalus::ZString* argv, size_t argc) {
+GlobalFx GlobalEffects::startEffect(std::string_view what, uint64_t len, const std::string* argv, size_t argc) {
   auto     ret = create(what,argv,argc);
   auto&    eff = *ret.h;
   if(len==0)
@@ -107,7 +112,7 @@ void GlobalEffects::stopEffect(const VisualFx& vfx) {
     quakeEff.clear();
   }
 
-GlobalFx GlobalEffects::create(const Daedalus::ZString& what, const Daedalus::ZString* argv, size_t argc) {
+GlobalFx GlobalEffects::create(std::string_view what, const std::string* argv, size_t argc) {
   if(what=="time.slw")
     return addSlowTime(argv,argc);
   if(what=="screenblend.scx")
@@ -119,10 +124,16 @@ GlobalFx GlobalEffects::create(const Daedalus::ZString& what, const Daedalus::ZS
   return GlobalFx();
   }
 
-GlobalFx GlobalEffects::addSlowTime(const Daedalus::ZString* argv, size_t argc) {
+GlobalFx GlobalEffects::addSlowTime(const std::string* argv, size_t argc) {
   double val[2] = {1,1};
-  for(size_t i=0; i<argc && i<2; ++i)
-    val[i] = std::atof(argv[i].c_str());
+  for(size_t i=0; i<argc && i<2; ++i) {
+    try {
+      val[i] = std::stof(argv[i]);
+      }
+    catch(...) {
+      Log::e("invalid time.slw parameter [",i,"]: \"", argv[i], "\"");
+      }
+    }
   uint64_t v[2] = {};
   for(int i=0; i<2; ++i)
     v[i] = uint64_t(val[i]*1000);
@@ -134,19 +145,37 @@ GlobalFx GlobalEffects::addSlowTime(const Daedalus::ZString* argv, size_t argc) 
   return GlobalFx(timeEff.back());
   }
 
-GlobalFx GlobalEffects::addScreenBlend(const Daedalus::ZString* argv, size_t argc) {
+GlobalFx GlobalEffects::addScreenBlend(const std::string* argv, size_t argc) {
   ScreenBlend sc;
 
-  if(0<argc)
-    sc.loop   = float(std::atof(argv[0].c_str()));
-  if(1<argc)
-    sc.cl     = parseColor(argv[1].c_str());
-  if(2<argc)
-    sc.inout  = float(std::atof(argv[2].c_str()));
-  if(3<argc)
-    sc.frames = Resources::loadTextureAnim(argv[3].c_str());
-  if(4<argc)
-    sc.fps    = size_t(std::atoi(argv[4].c_str()));
+  if(0<argc) try {
+    sc.loop   = float(std::stof(argv[0]));
+    }
+  catch(...) {
+    Log::e("invalid screenblend.scx parameter [0]: \"", argv[0], "\"");
+    }
+
+  if(1<argc) {
+    sc.cl     = parseColor(argv[1]);
+    }
+
+  if(2<argc) try {
+    sc.inout  = float(std::stof(argv[2]));
+    }
+  catch(...){
+    Log::e("invalid screenblend.scx parameter [2]: \"", argv[2], "\"");
+    }
+
+  if(3<argc) {
+    sc.frames = Resources::loadTextureAnim(argv[3]);
+    }
+
+  if(4<argc) try {
+    sc.fps    = size_t(std::stoi(argv[4]));
+    }
+  catch(...) {
+    Log::e("invalid screen-blend parameter [4]: \"", argv[4], "\"");
+    }
 
   sc.timeLoop = uint64_t(sc.loop*1000.f);
 
@@ -154,10 +183,10 @@ GlobalFx GlobalEffects::addScreenBlend(const Daedalus::ZString* argv, size_t arg
   return GlobalFx(scrEff.back());
   }
 
-GlobalFx GlobalEffects::addMorphFov(const Daedalus::ZString* argv, size_t argc) {
+GlobalFx GlobalEffects::addMorphFov(const std::string* argv, size_t argc) {
   double val[4] = {0,0,0,0};
   for(size_t i=0; i<argc && i<4; ++i) {
-    val[i] = std::atof(argv[i].c_str());
+    val[i] = std::stof(argv[i]);
     }
   Morph m;
   m.amplitude = float(val[0]);
@@ -169,13 +198,15 @@ GlobalFx GlobalEffects::addMorphFov(const Daedalus::ZString* argv, size_t argc) 
   return GlobalFx(morphEff.back());
   }
 
-GlobalFx GlobalEffects::addEarthQuake(const Daedalus::ZString*, size_t) {
+GlobalFx GlobalEffects::addEarthQuake(const std::string*, size_t) {
   quakeEff.emplace_back(std::make_shared<Quake>());
   return GlobalFx(quakeEff.back());
   }
 
-Tempest::Color GlobalEffects::parseColor(std::string_view s) {
+Tempest::Color GlobalEffects::parseColor(std::string_view sv) {
+  auto  s    = std::string(sv);
   auto  str  = s.data();
+
   float v[4] = {};
   for(int i=0;i<4;++i) {
     char* next=nullptr;

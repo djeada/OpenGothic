@@ -65,9 +65,19 @@ make -C build -j $(nproc)
 # locate the executables at OpenGothic/build/opengothic
 ```
 
-### Gameplay video
-[![Video](https://img.youtube.com/vi/R9MNhNsBVQ0/0.jpg)](https://www.youtube.com/watch?v=R9MNhNsBVQ0)
-[![Video](https://img.youtube.com/vi/6BvwNkPMbwM/0.jpg)](https://www.youtube.com/watch?v=6BvwNkPMbwM)
+### Build on MacOS
+```bash
+brew install glslang
+git clone --recurse-submodules https://github.com/Try/OpenGothic.git
+cd OpenGothic
+cmake -H. -Bbuild -DCMAKE_BUILD_TYPE:STRING=RelWithDebInfo
+cmake --build ./build --target Gothic2Notr
+
+# locate the executables at OpenGothic/build/opengothic
+```
+
+### Video
+[![Video](https://img.youtube.com/vi/TpayMkyZ58Y/0.jpg)](https://www.youtube.com/watch?v=TpayMkyZ58Y)
 
 ### Mods compatibility
 - [x] Content mods (retexture/reworld/animations)
@@ -82,7 +92,6 @@ make -C build -j $(nproc)
 | `-g`                   | specify path containing Gothic game data                         |
 | `-game:<modfile.init>` | specify game modification manifest (GothicStarter compatibility) |
 | `-nomenu`              | skip main menu                                                   |
-| `-nofrate`             | disable FPS display in-game                                      |
 | `-w <worldname.zen>`   | startup world; newworld.zen is default                           |
 | `-save q`              | load the quick save on start                                     |
 | `-save <number>`       | load a specified save-game slot on start                         |

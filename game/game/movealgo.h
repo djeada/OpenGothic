@@ -4,7 +4,8 @@
 #include <array>
 #include <limits>
 
-#include <zenload/zTypes.h>
+#include <phoenix/material.hh>
+
 #include <Tempest/Point>
 
 #include "physics/dynamicworld.h"
@@ -53,7 +54,7 @@ class MoveAlgo final {
     bool    startClimb(JumpStatus ani);
     void    startDive();
 
-    bool    isFaling()  const;
+    bool    isFalling() const;
     bool    isSlide()   const;
     bool    isInAir()   const;
     bool    isJumpup()  const;
@@ -62,7 +63,7 @@ class MoveAlgo final {
     bool    isSwim()    const;
     bool    isDive()    const;
 
-    uint8_t groundMaterial() const;
+    phoenix::material_group groundMaterial() const;
     auto    groundNormal() const -> Tempest::Vec3;
 
     auto    portalName() -> std::string_view;
@@ -82,6 +83,7 @@ class MoveAlgo final {
     void    tickSwim   (uint64_t dt);
     void    tickClimb  (uint64_t dt);
     void    tickJumpup (uint64_t dt);
+    bool    tickRun(uint64_t dt, MvFlags moveFlg);
 
     bool    tryMove    (float x, float y, float z);
     bool    tryMove    (float x, float y, float z, DynamicWorld::CollisionTest& out);
@@ -89,7 +91,7 @@ class MoveAlgo final {
     enum Flags : uint32_t {
       NoFlags = 0,
       InAir   = 1<<1,
-      Faling  = 1<<2,
+      Falling = 1<<2,
       Slide   = 1<<3,
       JumpUp  = 1<<4,
       ClimbUp = 1<<5,
@@ -98,13 +100,14 @@ class MoveAlgo final {
       Dive    = 1<<8,
       };
 
-    void    setInAir   (bool f);
-    void    setAsJumpup(bool f);
-    void    setAsClimb (bool f);
-    void    setAsSlide (bool f);
-    void    setInWater (bool f);
-    void    setAsSwim  (bool f);
-    void    setAsDive  (bool f);
+    void    setInAir    (bool f);
+    void    setAsJumpup (bool f);
+    void    setAsClimb  (bool f);
+    void    setAsSlide  (bool f);
+    void    setInWater  (bool f);
+    void    setAsSwim   (bool f);
+    void    setAsDive   (bool f);
+    void    setAsFalling(bool f);
 
     bool    slideDir() const;
     bool    isForward(const Tempest::Vec3& dp) const;
@@ -125,6 +128,7 @@ class MoveAlgo final {
     float   slideAngle()  const;
     float   slideAngle2() const;
     void    takeFallDamage() const;
+    void    takeDrownDamage() const;
 
     void    emitWaterSplash(float y);
 

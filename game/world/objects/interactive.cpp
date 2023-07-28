@@ -3,44 +3,70 @@
 #include <Tempest/Painter>
 #include <Tempest/Log>
 
+#include <phoenix/vobs/mob.hh>
+
 #include "game/serialize.h"
 #include "graphics/mesh/skeleton.h"
+#include "utils/string_frm.h"
+#include "world/triggers/abstracttrigger.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
 #include "utils/dbgpainter.h"
+#include "gothic.h"
 
-Interactive::Interactive(Vob* parent, World &world, ZenLoad::zCVobData& vob, Flags flags)
+static Npc::Anim toNpcAnim(Interactive::Anim dir) {
+  switch(dir) {
+    case Interactive::Anim::In:        return Npc::Anim::InteractIn;
+    case Interactive::Anim::Active:    return Npc::Anim::InteractIn;
+    case Interactive::Anim::Out:       return Npc::Anim::InteractOut;
+    case Interactive::Anim::ToStand:   return Npc::Anim::InteractToStand;
+    case Interactive::Anim::FromStand: return Npc::Anim::InteractFromStand;
+    }
+  return Npc::Anim::InteractIn;
+  }
+
+Interactive::Interactive(Vob* parent, World &world, const phoenix::vobs::mob& vob, Flags flags)
   : Vob(parent,world,vob,flags) {
-  vobName       = std::move(vob.vobName);
-  focName       = std::move(vob.oCMOB.focusName);
-  bbox[0]       = Tempest::Vec3(vob.bbox[0].x,vob.bbox[0].y,vob.bbox[0].z);
-  bbox[1]       = Tempest::Vec3(vob.bbox[1].x,vob.bbox[1].y,vob.bbox[1].z);
-  owner         = std::move(vob.oCMOB.owner);
-  focOver       = vob.oCMOB.focusOverride;
-  showVisual    = vob.showVisual;
+
+  vobName       = vob.vob_name;
+  focName       = vob.name;
+  bbox[0]       = {vob.bbox.min.x, vob.bbox.min.y, vob.bbox.min.z};
+  bbox[1]       = {vob.bbox.max.x, vob.bbox.max.y, vob.bbox.max.z};
+  owner         = vob.owner;
+  focOver       = vob.focus_override;
+  showVisual    = vob.show_visual;
 
   auto p = position();
   displayOffset = Tempest::Vec3(0,bbox[1].y-p.y,0);
 
-  stateNum      = vob.oCMobInter.stateNum;
-  triggerTarget = std::move(vob.oCMobInter.triggerTarget);
-  useWithItem   = std::move(vob.oCMobInter.useWithItem);
-  conditionFunc = std::move(vob.oCMobInter.conditionFunc);
-  onStateFunc   = std::move(vob.oCMobInter.onStateFunc);
-  rewind        = std::move(vob.oCMobInter.rewind);
+  if(vob.type != phoenix::vob_type::oCMOB) {
+    // TODO: These might be movable
+    auto& inter = reinterpret_cast<const phoenix::vobs::mob_inter&>(vob);
+    stateNum      = inter.state;
+    triggerTarget = inter.target;
+    useWithItem   = inter.item;
+    conditionFunc = inter.condition_function;
+    onStateFunc   = inter.on_state_change_function;
+    rewind        = inter.rewind;
+    }
 
   for(auto& i:owner)
     i = char(std::toupper(i));
 
-  if(vobType==ZenLoad::zCVobData::VT_oCMobContainer ||
-     vobType==ZenLoad::zCVobData::VT_oCMobDoor) {
-    locked      = vob.oCMobLockable.locked;
-    keyInstance = std::move(vob.oCMobLockable.keyInstance);
-    pickLockStr = std::move(vob.oCMobLockable.pickLockStr);
+  if(vobType==phoenix::vob_type::oCMobDoor) {
+    auto& door = reinterpret_cast<const phoenix::vobs::mob_door&>(vob);
+    locked      = door.locked;
+    keyInstance = door.key;
+    pickLockStr = door.pick_string;
     }
 
   if(isContainer() && (flags&Flags::Startup)==Flags::Startup) {
-    auto items  = std::move(vob.oCMobContainer.contains);
+    auto& container = reinterpret_cast<const phoenix::vobs::mob_container&>(vob);
+    locked      = container.locked;
+    keyInstance = container.key;
+    pickLockStr = container.pick_string;
+
+    auto items  = std::move(container.contents);
     if(items.size()>0) {
       char* it = &items[0];
       for(auto i=it;;++i) {
@@ -59,7 +85,7 @@ Interactive::Interactive(Vob* parent, World &world, ZenLoad::zCVobData& vob, Fla
     }
 
   setVisual(vob);
-  mdlVisual = std::move(vob.visual);
+  mdlVisual = std::move(vob.visual_name);
 
   if(isLadder() && !mdlVisual.empty()) {
     // NOTE: there must be else way to determinate steps count, nut for now - we parse filename
@@ -70,6 +96,9 @@ Interactive::Interactive(Vob* parent, World &world, ZenLoad::zCVobData& vob, Fla
       --at;
     stepsCount = std::atoi(mdlVisual.c_str()+at);
     stateNum   = stepsCount;
+
+    transform().project(displayOffset);
+    displayOffset -= position();
     }
 
   world.addInteractive(this);
@@ -92,9 +121,9 @@ void Interactive::load(Serialize &fin) {
     std::string name;
     Npc*        user       = nullptr;
     bool        attachMode = false;
-    bool        started    = false;
+    Phase       started    = NonStarted;
 
-    fin.read(name,user,attachMode,started);
+    fin.read(name,user,attachMode,reinterpret_cast<uint8_t&>(started));
 
     for(auto& a:attPos)
       if(a.name==name) {
@@ -108,8 +137,8 @@ void Interactive::load(Serialize &fin) {
     invent.load(fin,*this,world); else
     invent.clear(world.script(),*this,true);
 
-  fin.setEntry("worlds/",fin.worldName(),"/mobsi/",vobObjectID,"/visual");
-  visual.load(fin,*this);
+  fin.setEntry("worlds/", fin.worldName(), "/mobsi/", vobObjectID, "/visual");
+  visual.load(fin, *this);
   visual.setObjMatrix(transform());
   visual.syncPhysics();
   }
@@ -127,7 +156,7 @@ void Interactive::save(Serialize &fout) const {
 
   fout.write(uint32_t(attPos.size()));
   for(auto& i:attPos) {
-    fout.write(i.name,i.user,i.attachMode,i.started);
+    fout.write(i.name,i.user,i.attachMode,uint8_t(i.started));
     }
 
   if(!invent.isEmpty()) {
@@ -151,16 +180,14 @@ void Interactive::resetPositionToTA(int32_t state) {
       return;
 
   loopState = false;
-
-  char buf[256]={};
-  if(state<0)
-    std::snprintf(buf,sizeof(buf),"S_S0"); else
-    std::snprintf(buf,sizeof(buf),"S_S%d",state);
+  string_frm buf("S_S0");
+  if(state>0)
+    buf = string_frm("S_S",int(state));
   visual.startAnimAndGet(buf,world.tickCount(),true);
   setState(state);
   }
 
-void Interactive::setVisual(ZenLoad::zCVobData& vob) {
+void Interactive::setVisual(const phoenix::vob& vob) {
   visual.setVisual(vob,world,true);
   visual.setObjMatrix(transform());
   visual.setInteractive(this);
@@ -203,13 +230,13 @@ void Interactive::tick(uint64_t dt) {
     // Note: oCMobInter::rewind, oCMobInter with killed user has to go back to state=-1
     // All other cases, oCMobFire, oCMobDoor in particular - preserve old state
     const int destSt = -1;
-    if(destSt!=state && (vobType==ZenLoad::zCVobData::VT_oCMobInter || rewind)) {
+    if(destSt!=state && (vobType==phoenix::vob_type::oCMobInter || rewind)) {
       if(!setAnim(nullptr,Anim::Out))
         return;
       auto prev = state;
       setState(state-1);
       loopState = (prev==state);
-      }    
+      }
     return;
     }
 
@@ -217,25 +244,80 @@ void Interactive::tick(uint64_t dt) {
     return;
   if(p->user==nullptr && (state==stateNum && p->attachMode))
     return;
-  implTick(*p,dt);
+
+  if(isLadder() && p->started==Started && p->user!=nullptr && p->user->isAiQueueEmpty())
+    return;
+  implTick(*p);
   }
 
-void Interactive::implTick(Pos& p, uint64_t /*dt*/) {
-  if(p.user==nullptr)
+void Interactive::onKeyInput(KeyCodec::Action act) {
+  if(world.tickCount()<waitAnim)
     return;
 
-  Npc& npc = *p.user;
-  if(!p.started) {
-    // STAND -> S0
-    auto sq = npc.setAnimAngGet(Npc::Anim::InteractFromStand);
-    uint64_t t = sq==nullptr ? 0 : uint64_t(sq->totalTime());
-    waitAnim   = world.tickCount()+t;
-    p.started  = sq!=nullptr;
-    setState(std::min(stateNum,state+1));
+  Pos* p = nullptr;
+  for(auto& i:attPos) {
+    if(i.user!=nullptr) {
+      p = &i;
+      }
+    }
+  if(p==nullptr)
+    return;
+
+  auto& npc = *p->user;
+  assert(npc.isPlayer());
+
+  if(act==KeyCodec::ActionGeneric) {
+    npc.setInteraction(nullptr);
+    npc.stopAnim("");
+    p->user = nullptr;
     return;
     }
 
+  if(act!=KeyCodec::Forward && act!=KeyCodec::Back)
+    return;
+
+  reverseState = (act==KeyCodec::Back);
+  implTick(*p);
+  }
+
+void Interactive::implTick(Pos& p) {
+  if(p.user==nullptr)
+    return;
+
+  Npc&       npc    = *p.user;
   const bool attach = (p.attachMode^reverseState);
+
+  if(p.started==NonStarted) {
+    const bool omit = (!isLadder() && reverseState && state>0);
+    if(omit) {
+      loopState = false;
+      p.started = Started;
+      return;
+      }
+
+    // STAND -> S0
+    if(!setAnim(&npc, Anim::FromStand)) {
+      // some  mobsi have no animations in G2 - ignore them
+      p.started    = Quit;
+      p.attachMode = false;
+      return;
+      }
+
+    if(attach)
+      setState(std::min(stateNum,state+1)); else
+      setState(std::max(0,state-1));
+
+    loopState = false;
+    p.started = Started;
+    }
+
+  if(p.started==Quit) {
+    npc.quitInteraction();
+    loopState = false;
+    p.user    = nullptr;
+    p.started = NonStarted;
+    return;
+    }
 
   if(!loopState) {
     if(stateNum==state && attach) {
@@ -248,7 +330,7 @@ void Interactive::implTick(Pos& p, uint64_t /*dt*/) {
       }
     }
 
-  if(!attach && state==0) {
+  if((state==0 && !attach) || (isLadder() && (attach && state>=stepsCount-1))) {
     implQuitInteract(p);
     return;
     }
@@ -260,16 +342,12 @@ void Interactive::implTick(Pos& p, uint64_t /*dt*/) {
       }
     }
 
-  if((p.attachMode^reverseState) && state==stateNum){
-    // if(!setAnim(&npc,Anim::Active))
-    //   return;
-    }
-  else if(p.attachMode) {
-    if(!setAnim(&npc,Anim::In))
-      return;
-    }
-  else {
-    if(!setAnim(&npc,Anim::Out))
+  Anim dir = (attach ? Anim::In : Anim::Out);
+  if(state==stateNum && attach)
+    dir = Anim::Active;
+
+  if(!loopState) {
+    if(!setAnim(&npc, dir))
       return;
     }
 
@@ -278,41 +356,25 @@ void Interactive::implTick(Pos& p, uint64_t /*dt*/) {
     emitTriggerEvent();
     }
 
-  if(npc.isPlayer() && !loopState) {
+  if(npc.isPlayer() && !loopState && attach) {
     invokeStateFunc(npc);
     }
 
   const int prev = state;
-  if(attach) {
-    setState(std::min(stateNum,state+1));
-    } else {
+  if(attach)
+    setState(std::min(stateNum,state+1)); else
     setState(std::max(0,state-1));
-    }
-  loopState = (prev==state);
-  }
-
-void Interactive::nextState(Npc& npc) {
-  const int prev = state;
-  if(!setAnim(&npc,Anim::In))
-    return;
-  setState(std::min(stateNum,state+1));
   loopState = (prev==state);
   }
 
 void Interactive::implQuitInteract(Interactive::Pos &p) {
   if(p.user==nullptr)
     return;
-  Npc& npc = *p.user;
-  const Animation::Sequence* sq = nullptr;
-  if(state==0) {
-    // S0 -> STAND
-    sq = npc.setAnimAngGet(Npc::Anim::InteractToStand);
-    }
-  if(sq==nullptr && !(npc.isDown() || npc.setAnim(Npc::Anim::Idle)))
+  // S[i] -> STAND
+  if(!setAnim(p.user, Anim::ToStand))
     return;
-  npc.quitIneraction();
-  p.user      = nullptr;
-  loopState   = false;
+  // quit will be triggered with delay depend on animation
+  p.started = Quit;
   }
 
 std::string_view Interactive::tag() const {
@@ -347,22 +409,22 @@ std::string_view Interactive::displayName() const {
   if(focName.empty())
     return "";
 
-  const char* strId=focName.c_str();
-  char buf[256] = {};
-  if(world.script().getSymbolIndex(strId)==size_t(-1)) {
-    std::snprintf(buf,sizeof(buf),"MOBNAME_%s",strId);
-    strId = buf;
-    }
+  string_frm strId(focName);
+  if(world.script().findSymbolIndex(strId)==size_t(-1))
+    strId = string_frm("MOBNAME_",strId);
 
-  if(world.script().getSymbolIndex(strId)==size_t(-1)) {
+  if(world.script().findSymbolIndex(strId)==size_t(-1))
     return "";
-    }
 
-  auto& s=world.script().getSymbol(strId);
-  const char* txt = s.getString(0).c_str();
-  if(std::strlen(txt)==0)
-    txt="";
-  return txt;
+  auto* s=world.script().findSymbol(strId);
+  if(s==nullptr)
+    return "";
+
+  return s->get_string();
+  }
+
+const Tempest::Vec3* Interactive::bBox() const {
+  return bbox;
   }
 
 bool Interactive::setMobState(std::string_view scheme, int32_t st) {
@@ -373,10 +435,8 @@ bool Interactive::setMobState(std::string_view scheme, int32_t st) {
   if(schemeName()!=scheme)
     return ret;
 
-  char buf[256]={};
-  std::snprintf(buf,sizeof(buf),"S_S%d",st);
-  if(visual.startAnimAndGet(buf,world.tickCount())!=nullptr ||
-     !visual.isAnimExist(buf)) {
+  string_frm name("S_S",st);
+  if(visual.startAnimAndGet(name,world.tickCount())!=nullptr || !visual.isAnimExist(name)) {
     setState(st);
     return ret;
     }
@@ -388,11 +448,10 @@ void Interactive::invokeStateFunc(Npc& npc) {
     return;
   if(loopState)
     return;
-  char func[256]={};
-  std::snprintf(func,sizeof(func),"%s_S%d",onStateFunc.c_str(),state);
 
+  string_frm func(onStateFunc,"_S",state);
   auto& sc = npc.world().script();
-  sc.useInteractive(npc.handle(),func);
+  sc.useInteractive(npc.handlePtr(), func);
   }
 
 void Interactive::emitTriggerEvent() const {
@@ -404,7 +463,7 @@ void Interactive::emitTriggerEvent() const {
 
 std::string_view Interactive::schemeName() const {
   if(auto mesh = visual.protoMesh())
-    return mesh->scheme.c_str();
+    return mesh->scheme;
   Tempest::Log::i("unable to recognize mobsi{",focName,", ",mdlVisual,"}");
   return "";
   }
@@ -418,15 +477,28 @@ std::string_view Interactive::posSchemeName() const {
   }
 
 bool Interactive::isContainer() const {
-  return vobType==ZenLoad::zCVobData::VT_oCMobContainer;
+  return vobType==phoenix::vob_type::oCMobContainer;
+  }
+
+bool Interactive::isDoor() const {
+  return vobType==phoenix::vob_type::oCMobDoor;
+  }
+
+bool Interactive::isTrueDoor(const Npc& npc) const {
+  if(!isDoor())
+    return false;
+  for(int i=1; i<=stateNum; ++i)
+    if(canQuitAtState(npc,i))
+      return true;
+  return false;
   }
 
 bool Interactive::isLadder() const {
-  return vobType==ZenLoad::zCVobData::VT_oCMobLadder;
+  return vobType==phoenix::vob_type::oCMobLadder;
   }
 
 bool Interactive::needToLockpick(const Npc& pl) const {
-  const size_t keyInst = keyInstance.empty() ? size_t(-1) : world.script().getSymbolIndex(keyInstance.c_str());
+  const size_t keyInst = keyInstance.empty() ? size_t(-1) : world.script().findSymbolIndex(keyInstance);
   if(keyInst!=size_t(-1) && pl.inventory().itemCount(keyInst)>0)
     return false;
   return !(pickLockStr.empty() || isLockCracked);
@@ -503,7 +575,7 @@ void Interactive::implAddItem(std::string_view name) {
     }
   }
 
-void Interactive::autoDettachNpc() {
+void Interactive::autoDetachNpc() {
   for(auto& i:attPos)
     if(i.user!=nullptr) {
       if(i.user->world().aiIsDlgFinished())
@@ -517,12 +589,13 @@ bool Interactive::checkUseConditions(Npc& npc) {
   auto& sc = npc.world().script();
 
   if(isPlayer) {
-    const size_t ItKE_lockpick  = world.script().getSymbolIndex("ItKE_lockpick");
-    const size_t lockPickCnt    = npc.inventory().itemCount(ItKE_lockpick);
-    const bool   canLockPick    = (npc.talentSkill(TALENT_PICKLOCK)!=0 && lockPickCnt>0);
+    const bool             g1             = Gothic::inst().version().game==1;
+    const size_t           ItKE_lockpick  = world.script().lockPickId();
+    const size_t           lockPickCnt    = npc.inventory().itemCount(ItKE_lockpick);
+    const bool             canLockPick    = ((g1 || npc.talentSkill(TALENT_PICKLOCK)!=0) && lockPickCnt>0);
 
-    const size_t keyInst        = keyInstance.empty() ? size_t(-1) : world.script().getSymbolIndex(keyInstance.c_str());
-    const bool   needToPicklock = (pickLockStr.size()>0);
+    const size_t           keyInst        = keyInstance.empty() ? size_t(-1) : world.script().findSymbolIndex(keyInstance);
+    const bool             needToPicklock = (pickLockStr.size()>0);
 
     if(keyInst!=size_t(-1) && npc.itemCount(keyInst)>0)
       return true;
@@ -549,7 +622,7 @@ bool Interactive::checkUseConditions(Npc& npc) {
       }
 
     if(!useWithItem.empty()) {
-      size_t it = world.script().getSymbolIndex(useWithItem);
+      size_t it = world.script().findSymbolIndex(useWithItem);
       if(it!=size_t(-1) && npc.itemCount(it)==0) {
         sc.printMobMissingItem(npc);
         return false;
@@ -599,7 +672,7 @@ bool Interactive::isAvailable() const {
 bool Interactive::isStaticState() const {
   for(auto& i:attPos)
     if(i.user!=nullptr) {
-      if(i.attachMode)
+      if(i.attachMode && i.started==Started)
         return loopState;
       return false;
       }
@@ -613,18 +686,19 @@ bool Interactive::isDetachState(const Npc& npc) const {
   return !reverseState;
   }
 
-bool Interactive::canQuitAtState(Npc& npc, int32_t state) const {
+bool Interactive::canQuitAtState(const Npc& npc, int32_t state) const {
   if(state<0)
     return true;
-  //if(isLadder())
-  //  return false;
-  auto scheme   = schemeName();
-  auto pos      = posSchemeName();
-  char frm[256] = {};
-  if(!pos.empty())
-    std::snprintf(frm,sizeof(frm),"T_%.*s_%.*s_S%d_2_STAND",int(scheme.size()),scheme.data(),int(pos.size()),pos.data(),state); else
-    std::snprintf(frm,sizeof(frm),"T_%.*s_S%d_2_STAND",int(scheme.size()),scheme.data(),state);
-  if(npc.hasAnim(frm))
+
+  auto scheme = schemeName();
+  auto pos    = posSchemeName();
+
+  string_frm anim;
+  if(pos.empty())
+    anim = string_frm("T_",scheme,"_S",state,"_2_STAND"); else
+    anim = string_frm("T_",scheme,"_",pos,"_S",state,"_2_STAND");
+
+  if(npc.hasAnim(anim))
     return true;
   return state==stateNum && reverseState;
   }
@@ -636,11 +710,7 @@ bool Interactive::attach(Npc& npc, Interactive::Pos& to) {
   float x=0, y=0, z=0;
   mat.project(x,y,z);
 
-  Tempest::Vec3 mv = {x,y-npc.translateY(),z};
-  if(!npc.testMove(mv)) {
-    // FIXME: switches on stone-arks
-    // return false;
-    }
+  const Tempest::Vec3 mv = {x,y-npc.translateY(),z};
 
   if((npc.position()-mv).quadLength()>MAX_AI_USE_DISTANCE*MAX_AI_USE_DISTANCE) {
     if(npc.isPlayer()) {
@@ -655,14 +725,16 @@ bool Interactive::attach(Npc& npc, Interactive::Pos& to) {
     return false;
 
   if(!useWithItem.empty()) {
-    size_t it = world.script().getSymbolIndex(useWithItem.c_str());
+    size_t it = world.script().findSymbolIndex(useWithItem);
     npc.setCurrentItem(it);
     }
 
-  setPos(npc,mv);
+  if(!setPos(npc,mv))
+    return false;
+
   setDir(npc,mat);
 
-  if(vobType==ZenLoad::zCVobData::VT_oCMobLadder) {
+  if(vobType==phoenix::vob_type::oCMobLadder) {
     if(&to!=&attPos[0])
       state = -1; else
       state = stepsCount;
@@ -677,7 +749,7 @@ bool Interactive::attach(Npc& npc, Interactive::Pos& to) {
     }
 
   to.user       = &npc;
-  to.started    = false;
+  to.started    = NonStarted;
   to.attachMode = true;
   return true;
   }
@@ -702,23 +774,24 @@ bool Interactive::attach(Npc &npc) {
   return false;
   }
 
-bool Interactive::dettach(Npc &npc, bool quick) {
+bool Interactive::detach(Npc &npc, bool quick) {
   for(auto& i:attPos) {
     if(i.user==&npc && i.attachMode) {
-      if(canQuitAtState(*i.user,state)) {
+      if(quick || canQuitAtState(*i.user,state)) {
+        if(!quick) {
+          auto sq = npc.setAnimAngGet(Npc::Anim::InteractToStand);
+          if(sq==nullptr)
+            return false;
+          }
         i.user       = nullptr;
         i.attachMode = false;
-        npc.quitIneraction();
-        return true;
-        }
-      else if(quick) {
-        i.user       = nullptr;
-        i.attachMode = false;
-        npc.quitIneraction();
+        loopState    = false;
+        npc.quitInteraction();
         return true;
         }
       else {
         i.attachMode = false;
+        loopState    = false;
         return false;
         }
       return false;
@@ -735,8 +808,15 @@ bool Interactive::isAttached(const Npc& to) {
   return false;
   }
 
-void Interactive::setPos(Npc &npc,const Tempest::Vec3& pos) {
+bool Interactive::setPos(Npc &npc,const Tempest::Vec3& pos) {
+  auto prev = npc.position();
   npc.setPosition(pos);
+  world.script().fixNpcPosition(npc,0,0);
+  if(npc.hasCollision()) {
+    npc.setPosition(prev);
+    return false;
+    }
+  return true;
   }
 
 void Interactive::setDir(Npc &npc, const Tempest::Matrix4x4 &mat) {
@@ -818,13 +898,14 @@ Tempest::Matrix4x4 Interactive::nodeTranform(std::string_view nodeName) const {
   }
 
 const Animation::Sequence* Interactive::setAnim(Interactive::Anim t) {
-  int  st[]     = {state,state+(reverseState ? -t : t)};
+  int  dir       = (t==Anim::Out || t==Anim::ToStand) ? -1 : 1;
+  int  st[]      = {state,state+dir};
   char ss[2][12] = {};
 
   st[1] = std::max(0,std::min(st[1],stateNum));
 
   char buf[256]={};
-  for(int i=0;i<2;++i){
+  for(int i=0;i<2;++i) {
     if(st[i]<0)
       std::snprintf(ss[i],sizeof(ss[i]),"S0"); else
       std::snprintf(ss[i],sizeof(ss[i]),"S%d",st[i]);
@@ -840,12 +921,14 @@ const Animation::Sequence* Interactive::setAnim(Interactive::Anim t) {
   }
 
 bool Interactive::setAnim(Npc* npc, Anim dir) {
-  const Npc::Anim            dest = dir==Anim::Out ? Npc::Anim::InteractOut : Npc::Anim::InteractIn;
+  const Npc::Anim            dest = toNpcAnim(dir);
   const Animation::Sequence* sqNpc=nullptr;
   const Animation::Sequence* sqMob=nullptr;
+
   if(npc!=nullptr) {
     sqNpc = npc->setAnimAngGet(dest);
-    if(sqNpc==nullptr && dir!=Anim::Out)
+    // NOTE: Book-stand has no 'out' animation
+    if(sqNpc==nullptr && !(vobType==phoenix::vob_type::oCMobInter && dir==Anim::Out))
       return false;
     }
   sqMob = setAnim(dir);
@@ -854,9 +937,9 @@ bool Interactive::setAnim(Npc* npc, Anim dir) {
 
   uint64_t aniT = sqNpc==nullptr ? 0 : uint64_t(sqNpc->totalTime());
   if(aniT==0) {
-    /* Note: testing shows that in vanilla only npc animation maters.
+    /* Note: testing shows that in vanilla only npc animation matters.
      * testcase: chest animation
-     * modsi timings only here for completness
+     * modsi timings only here for completeness
      */
     aniT = sqMob==nullptr ? 0 : uint64_t(sqMob->totalTime());
     }
@@ -873,40 +956,38 @@ void Interactive::setState(int st) {
 
 const Animation::Sequence* Interactive::animNpc(const AnimationSolver &solver, Anim t) {
   std::string_view tag      = schemeName();
-  int              st[]     = {state,state+(reverseState ? -t : t)};
-  char             ss[2][12] = {};
-  char             pointBuf[32] = {};
-  std::string_view point    = "";
+  int              st[]     = {state,state+t};
+  string_frm<12>   ss[2]    = {};
+  string_frm       pointBuf = {};
+  string_frm       point    = {};
 
   if(t==Anim::FromStand) {
     st[0] = -1;
-    st[1] = 0;
+    st[1] = state<1 ? 0 : stateNum - 1;
     }
   else if(t==Anim::ToStand) {
-    st[0] = 0;
+    st[0] = state<1 ? 0 : stateNum - 1;
     st[1] = -1;
     }
 
   for(auto& i:attPos)
     if(i.user!=nullptr) {
-      point = i.posTag();
-      std::snprintf(pointBuf,sizeof(pointBuf),"_%.*s",int(point.size()),point.data());
-      point = pointBuf;
+      point = string_frm("_",i.posTag());
       }
 
   st[1] = std::max(-1,std::min(st[1],stateNum));
 
-  char buf[256]={};
-  for(int i=0;i<2;++i){
+  for(int i=0;i<2;++i) {
     if(st[i]<0)
-      std::snprintf(ss[i],sizeof(ss[i]),"STAND"); else
-      std::snprintf(ss[i],sizeof(ss[i]),"S%d",st[i]);
+      ss[i] = "STAND"; else
+      ss[i] = string_frm("S",st[i]);
     }
 
-  for(auto pt:{point,std::string_view()}) {
+  string_frm buf = {};
+  for(auto pt:{std::string_view(point),std::string_view()}) {
     if(st[0]==st[1])
-      std::snprintf(buf,sizeof(buf),"S_%.*s%.*s_%s",     int(tag.size()),tag.data(),int(pt.size()),pt.data(),ss[0]); else
-      std::snprintf(buf,sizeof(buf),"T_%.*s%.*s_%s_2_%s",int(tag.size()),tag.data(),int(pt.size()),pt.data(),ss[0],ss[1]);
+      buf = string_frm("S_",tag,pt,ss[0]); else
+      buf = string_frm("T_",tag,pt,"_",ss[0],"_2_",ss[1]);
     if(auto ret = solver.solveFrm(buf))
       return ret;
     }

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <zenload/zCModelScript.h>
 #include <Tempest/Matrix4x4>
 
 #include "graphics/mesh/animationsolver.h"
@@ -38,6 +37,7 @@ class MdlVisual final {
     void                           setVisualBody(Npc& npc, MeshObjects::Mesh&& h, MeshObjects::Mesh&& body, int32_t version);
     void                           syncAttaches();
     const Skeleton*                visualSkeleton() const;
+    std::string_view               visualSkeletonScheme() const;
 
     bool                           hasOverlay(const Skeleton*  sk) const;
     void                           addOverlay(const Skeleton*  sk, uint64_t time);
@@ -49,11 +49,12 @@ class MdlVisual final {
     void                           setBody       (Npc& npc, MeshObjects::Mesh&& body, const int32_t version);
     void                           setSword      (MeshObjects::Mesh&& sword);
     void                           setRangeWeapon(MeshObjects::Mesh&& bow);
+    void                           setShield     (MeshObjects::Mesh&& shield);
     void                           setAmmoItem   (MeshObjects::Mesh&& ammo, std::string_view bone);
     void                           setSlotItem   (MeshObjects::Mesh&& itm,  std::string_view bone);
     void                           setStateItem  (MeshObjects::Mesh&& itm,  std::string_view bone);
     void                           clearSlotItem (std::string_view bone);
-    bool                           setFightMode  (const ZenLoad::EFightMode mode);
+    bool                           setFightMode  (phoenix::mds::event_fight_mode mode);
     void                           dropWeapon    (Npc& owner);
 
     void                           setMagicWeapon(Effect&& spell, World& owner);
@@ -62,7 +63,7 @@ class MdlVisual final {
     void                           startEffect (World& owner, Effect&& pfx, int32_t slot, bool noSlot);
     void                           stopEffect  (const VisualFx& vfx);
     void                           stopEffect  (int32_t slot);
-    void                           setNpcEffect(World& owner, Npc& npc, const Daedalus::ZString& s, Daedalus::GEngineClasses::C_Npc::ENPCFlag flags);
+    void                           setNpcEffect(World& owner, Npc& npc, std::string_view s, phoenix::npc_flag flags);
     void                           setFatness  (float f);
     void                           emitBlockEffect(Npc& dst, Npc& src);
 
@@ -88,8 +89,8 @@ class MdlVisual final {
     const Animation::Sequence*     startAnimAndGet(Npc& npc, AnimationSolver::Anim    a, uint8_t comb, WeaponState st, WalkBit wlk);
 
     bool                           startAnim      (Npc& npc, WeaponState st);
-    bool                           startAnimItem  (Npc& npc, std::string_view scheme, int state);
-    bool                           startAnimSpell (Npc& npc, std::string_view scheme, bool invest);
+    const Animation::Sequence*     startAnimItem  (Npc& npc, std::string_view scheme, int state);
+    const Animation::Sequence*     startAnimSpell (Npc& npc, std::string_view scheme, bool invest);
     bool                           startAnimDialog(Npc& npc);
     void                           startMMAnim    (Npc& npc, std::string_view anim, std::string_view node);
     void                           startFaceAnim  (Npc& npc, std::string_view anim, float intensity, uint64_t duration);
@@ -106,7 +107,7 @@ class MdlVisual final {
     const Tempest::Matrix4x4&      transform() const { return pos; }
     float                          viewDirection() const;
 
-    const Animation::Sequence*     continueCombo(Npc& npc, AnimationSolver::Anim a, WeaponState st, WalkBit wlk);
+    const Animation::Sequence*     continueCombo(Npc& npc, AnimationSolver::Anim a, BodyState bs, WeaponState st, WalkBit wlk);
     uint16_t                       comboLength() const;
 
     Bounds                         bounds() const;
@@ -151,7 +152,7 @@ class MdlVisual final {
     Tempest::Matrix4x4             pos;
     MeshObjects::Mesh              view;
 
-    MeshAttach                     head, sword, bow;
+    MeshAttach                     head, sword, bow, shield;
     MeshAttach                     ammunition, stateItm;
     std::vector<MeshAttach>        item;
     std::vector<MeshAttach>        attach;
@@ -161,7 +162,7 @@ class MdlVisual final {
 
     TorchSlot                      torch;
 
-    Daedalus::ZString              hnpcVisualName;
+    std::string                    hnpcVisualName;
     bool                           hnpcFlagGhost = false;
     PfxSlot                        hnpcVisual;
 

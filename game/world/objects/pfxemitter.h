@@ -3,16 +3,13 @@
 #include <Tempest/Matrix4x4>
 #include <Tempest/Vec>
 
-#include <zenload/zTypes.h>
-
 #include "world/collisionzone.h"
 #include "physics/dynamicworld.h"
 #include "graphics/meshobjects.h"
-#include "graphics/pfx/trlobjects.h"
 
 class World;
-class PfxBucket;
 class ParticleFx;
+class PfxBucket;
 class PfxObjects;
 class PfxEmitterMesh;
 
@@ -22,7 +19,7 @@ class PfxEmitter {
     PfxEmitter(World& world, std::string_view name);
     PfxEmitter(World& world, const ParticleFx* decl);
     PfxEmitter(PfxObjects& obj, const ParticleFx* vob);
-    PfxEmitter(World& world, const ZenLoad::zCVobData& vob);
+    PfxEmitter(World& world, const phoenix::vob& vob);
     ~PfxEmitter();
     PfxEmitter(PfxEmitter&&);
     PfxEmitter& operator=(PfxEmitter&& b);
@@ -53,7 +50,6 @@ class PfxEmitter {
     size_t     id     = size_t(-1);
 
     CollisionZone      zone;
-    TrlObjects::Item   trail;
     MeshObjects::Mesh  shpMesh;
 
   friend class PfxBucket;

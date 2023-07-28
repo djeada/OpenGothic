@@ -19,8 +19,6 @@
 #include <Tempest/Timer>
 #include <Tempest/Swapchain>
 
-#include <daedalus/DaedalusVM.h>
-
 #include <vector>
 #include <thread>
 
@@ -62,6 +60,8 @@ class MainWindow : public Tempest::Window {
     void keyRepeatEvent (Tempest::KeyEvent&   event) override;
     void keyUpEvent     (Tempest::KeyEvent&   event) override;
 
+    void focusEvent     (Tempest::FocusEvent&  event) override;
+
     void paintFocus     (Tempest::Painter& p, const Focus& fc, const Tempest::Matrix4x4& vp);
     void paintFocus     (Tempest::Painter& p, Tempest::Rect rect);
 
@@ -75,7 +75,7 @@ class MainWindow : public Tempest::Window {
     void loadGame (std::string_view slot);
     void saveGame (std::string_view slot, std::string_view name);
 
-    void onVideo(const Daedalus::ZString& fname);
+    void onVideo(std::string_view fname);
     void onStartLoading();
     void onWorldLoaded();
     void onSessionExit();
@@ -92,6 +92,7 @@ class MainWindow : public Tempest::Window {
     void render() override;
 
     uint64_t tick();
+    void     updateAnimation(uint64_t dt);
     void     tickCamera(uint64_t dt);
     void     isDialogClosed(bool& ret);
 
