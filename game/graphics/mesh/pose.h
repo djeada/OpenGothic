@@ -100,8 +100,8 @@ class Pose final {
     struct Layer final {
       const Animation::Sequence* seq      = nullptr;
       uint64_t                   sAnim    = 0;
+      uint64_t                   sBlend   = 0;
       uint8_t                    comb     = 0;
-      uint64_t                   blendOut = 0;
       BodyState                  bs       = BS_NONE;
       };
 
@@ -118,7 +118,7 @@ class Pose final {
     void implMkSkeleton(const Tempest::Matrix4x4 &mt);
     void implMkSkeleton(const Tempest::Matrix4x4 &mt, size_t parent);
 
-    bool updateFrame(const Animation::Sequence &s, BodyState bs, uint64_t barrier, uint64_t sTime, uint64_t now);
+    bool updateFrame(const Animation::Sequence &s, BodyState bs, uint64_t sBlend, uint64_t barrier, uint64_t sTime, uint64_t now);
 
     const Animation::Sequence* solveNext(const AnimationSolver& solver, const Layer& lay);
 
@@ -149,8 +149,8 @@ class Pose final {
 
     size_t                          numBones = 0;
     SampleStatus                    hasSamples[Resources::MAX_NUM_SKELETAL_NODES] = {};
-    phoenix::animation_sample       base      [Resources::MAX_NUM_SKELETAL_NODES] = {};
-    phoenix::animation_sample       prev      [Resources::MAX_NUM_SKELETAL_NODES] = {};
+    zenkit::AnimationSample         base      [Resources::MAX_NUM_SKELETAL_NODES] = {};
+    zenkit::AnimationSample         prev      [Resources::MAX_NUM_SKELETAL_NODES] = {};
     Tempest::Matrix4x4              tr        [Resources::MAX_NUM_SKELETAL_NODES] = {};
     Tempest::Matrix4x4              pos;
   };

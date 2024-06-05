@@ -1,5 +1,7 @@
 #include "bullet.h"
 
+#include <Tempest/Log>
+
 #include "graphics/visualfx.h"
 #include "world/objects/item.h"
 #include "world/objects/npc.h"
@@ -114,10 +116,10 @@ void Bullet::onMove() {
   updateMatrix();
   }
 
-void Bullet::onCollide(phoenix::material_group matId) {
+void Bullet::onCollide(zenkit::MaterialGroup matId) {
   if(isFinished())
     return;
-  if(matId != phoenix::material_group::none) {
+  if(matId != zenkit::MaterialGroup::NONE) {
     if(material < ItemMaterial::MAT_COUNT) {
       auto s = wrld->addLandHitEffect(ItemMaterial(material),matId,obj->matrix());
       s.play();
@@ -136,9 +138,13 @@ void Bullet::onCollide(Npc& npc) {
     return;
 
   if(ow!=nullptr) {
-    if(isSpell())
-      npc.takeDamage(*ow,this,vfx.handle(),spellId()); else
-      npc.takeDamage(*ow,this);
+    // no damage between ally npc's, only emit pfx effect
+    const bool friendlyFire = wrld->script().isFriendlyFire(*ow,npc);
+    if(!friendlyFire) {
+      if(isSpell())
+        npc.takeDamage(*ow,this,vfx.handle(),spellId()); else
+        npc.takeDamage(*ow,this);
+      }
     }
   vfx.setKey(*wrld,SpellFxKey::Collide);
   vfx.setLooped(false);

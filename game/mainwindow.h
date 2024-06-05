@@ -33,6 +33,7 @@
 #include "ui/videowidget.h"
 #include "ui/menuroot.h"
 #include "ui/consolewidget.h"
+#include "ui/touchinput.h"
 
 #include "utils/keycodec.h"
 #include "resources.h"
@@ -65,11 +66,12 @@ class MainWindow : public Tempest::Window {
     void paintFocus     (Tempest::Painter& p, const Focus& fc, const Tempest::Matrix4x4& vp);
     void paintFocus     (Tempest::Painter& p, Tempest::Rect rect);
 
-    void drawBar(Tempest::Painter& p, const Tempest::Texture2d *bar, int x, int y, float v, Tempest::AlignFlag flg);   
+    void drawBar(Tempest::Painter& p, const Tempest::Texture2d *bar, int x, int y, float v, Tempest::AlignFlag flg);
+    void drawMsg(Tempest::Painter& p);
     void drawProgress(Tempest::Painter& p, int x, int y, int w, int h, float v);
     void drawLoading (Tempest::Painter& p,int x,int y,int w,int h);
     void drawSaving  (Tempest::Painter& p);
-    void drawSaving  (Tempest::Painter& p, int w, int h, float scale);
+    void drawSaving  (Tempest::Painter& p, const Tempest::Texture2d& back, int w, int h, float scale);
 
     void startGame(std::string_view slot);
     void loadGame (std::string_view slot);
@@ -146,6 +148,9 @@ class MainWindow : public Tempest::Window {
     DocumentMenu              document;
     ChapterScreen             chapter;
     ConsoleWidget             console;
+#if defined(__MOBILE_PLATFORM__)
+    TouchInput                mobileUi;
+#endif
     RuntimeMode               runtimeMode = R_Normal;
 
     Tempest::Widget*          uiKeyUp=nullptr;

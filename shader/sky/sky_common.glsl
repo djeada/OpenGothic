@@ -18,15 +18,8 @@ const vec3  ozoneAbsorptionBase    = vec3(0.650, 1.881, .085) / 1e6;
 
 layout(push_constant, std430) uniform UboPush {
   mat4  viewProjectInv;
-  vec2  cloudsDir0;
-  vec2  cloudsDir1;
-  vec3  sunDir;
-  float night;
-  vec3  clipInfo;
   float plPosY;
   float rayleighScatteringScale;
-  float GSunIntensity;
-  float exposure;
   } push;
 
 vec3 inverse(vec3 pos) {
@@ -69,8 +62,9 @@ void scatteringValues(vec3 pos,
   vec3  ozoneAbsorption    = ozoneAbsorptionBase*ozoneDistribution;
 
   // Clouds Ah-Hook
-  mieScattering      *= exp( clouds*3.0); // (1.0+clouds*4.0);
-  rayleighScattering *= exp(-clouds*3.0); // (1.0-clouds*0.5);
+  clouds = max(0, clouds-0.2); // 0.33 in LH
+  mieScattering      *= exp( clouds*5.0); // (1.0+clouds*4.0);
+  rayleighScattering *= exp(-clouds*5.0); // (1.0-clouds*0.5);
 
   extinction = rayleighScattering + rayleighAbsorption +
                mieScattering + mieAbsorption +

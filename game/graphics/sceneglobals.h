@@ -2,11 +2,10 @@
 
 #include <Tempest/Matrix4x4>
 #include <Tempest/Vec>
-#include <list>
 
 #include "graphics/dynamic/frustrum.h"
 #include "lightgroup.h"
-#include "bindless.h"
+#include "rtscene.h"
 
 class Sky;
 
@@ -20,8 +19,11 @@ class SceneGlobals final {
       V_Shadow1    = 1,
       V_ShadowLast = 1,
       V_Main       = 2,
+      V_HiZ        = 3,
       V_Count
       };
+
+    static bool isShadowView(VisCamera v);
 
     void setViewProject(const Tempest::Matrix4x4& view, const Tempest::Matrix4x4& proj,
                         float zNear, float zFar,
@@ -52,6 +54,7 @@ class SceneGlobals final {
     Tempest::Matrix4x4                view, proj;
     Tempest::Matrix4x4                viewLwc;
     Tempest::Vec3                     originLwc;
+    float                             znear = 0;
 
     const Tempest::Texture2d*         sceneColor   = &Resources::fallbackBlack();
     const Tempest::Texture2d*         sceneDepth   = &Resources::fallbackBlack();
@@ -63,15 +66,13 @@ class SceneGlobals final {
     const Tempest::Texture2d*         hiZ          = &Resources::fallbackTexture();
     const Tempest::Texture2d*         skyLut       = &Resources::fallbackTexture();
 
-    const Tempest::AccelerationStructure* tlas = nullptr;
-
     struct UboGlobal final {
       Tempest::Matrix4x4              viewProject;
       Tempest::Matrix4x4              viewProjectInv;
       Tempest::Matrix4x4              viewShadow[Resources::ShadowLayers];
       Tempest::Matrix4x4              viewProjectLwcInv;
       Tempest::Matrix4x4              viewShadowLwc[Resources::ShadowLayers];
-      Tempest::Matrix4x4              view, project;
+      Tempest::Matrix4x4              view, project, projectInv;
       Tempest::Vec3                   sunDir        = {0,0,1};
       float                           waveAnim      = 0;
       Tempest::Vec3                   lightAmb      = {1,1,1};
@@ -107,8 +108,7 @@ class SceneGlobals final {
     Tempest::Vec2                     windDir = {0,1};
     uint64_t                          windPeriod = 6000;
 
-    bool                              tlasEnabled = true;
-    Bindless                          bindless;
+    RtScene                           rtScene;
 
   private:
     void                              initSettings();

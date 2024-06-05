@@ -2,16 +2,20 @@
 #include <Tempest/Application>
 #include <Tempest/Log>
 
-#include <Tempest/VulkanApi>
+#include <zenkit/Logger.hh>
 
-#include <phoenix/phoenix.hh>
+#include <Tempest/VulkanApi>
 
 #if defined(_MSC_VER)
 #include <Tempest/DirectX12Api>
 #endif
 
-#if defined(__OSX__)
+#if defined(__APPLE__)
 #include <Tempest/MetalApi>
+#endif
+
+#if defined(__IOS__)
+#include "utils/installdetect.h"
 #endif
 
 #include "utils/crashlog.h"
@@ -20,12 +24,12 @@
 #include "build.h"
 #include "commandline.h"
 
-const char* selectDevice(const Tempest::AbstractGraphicsApi& api) {
+std::string_view selectDevice(const Tempest::AbstractGraphicsApi& api) {
   auto d = api.devices();
 
   static Tempest::Device::Props p;
   for(auto& i:d)
-    //if(i.type==Tempest::DeviceType::Integrated) {
+    // if(i.type==Tempest::DeviceType::Integrated) {
     if(i.type==Tempest::DeviceType::Discrete) {
       p = i;
       return p.name;
@@ -34,7 +38,7 @@ const char* selectDevice(const Tempest::AbstractGraphicsApi& api) {
     p = d[0];
     return p.name;
     }
-  return nullptr;
+  return "";
   }
 
 std::unique_ptr<Tempest::AbstractGraphicsApi> mkApi(const CommandLine& g) {
@@ -47,14 +51,14 @@ std::unique_ptr<Tempest::AbstractGraphicsApi> mkApi(const CommandLine& g) {
       break;
 #endif
     case CommandLine::Vulkan:
-#if !defined(__OSX__)
+#if !defined(__APPLE__)
       return std::make_unique<Tempest::VulkanApi>(flg);
 #else
       break;
 #endif
     }
 
-#if defined(__OSX__)
+#if defined(__APPLE__)
   return std::make_unique<Tempest::MetalApi>(flg);
 #else
   return std::make_unique<Tempest::VulkanApi>(flg);
@@ -62,6 +66,13 @@ std::unique_ptr<Tempest::AbstractGraphicsApi> mkApi(const CommandLine& g) {
   }
 
 int main(int argc,const char** argv) {
+#if defined(__IOS__)
+  {
+    auto appdir = InstallDetect::applicationSupportDirectory();
+    std::filesystem::current_path(appdir);
+  }
+#endif
+
   try {
     static Tempest::WFile logFile("log.txt");
     Tempest::Log::setOutputCallback([](Tempest::Log::Mode mode, const char* text) {
@@ -71,19 +82,21 @@ int main(int argc,const char** argv) {
         logFile.flush();
       });
 
-    phoenix::logging::use_logger([] (phoenix::logging::level lvl, const std::string& message) {
+    zenkit::Logger::set(zenkit::LogLevel::INFO, [] (zenkit::LogLevel lvl, const char* cat, const char* message) {
+      (void)cat;
       switch (lvl) {
-        case phoenix::logging::level::error:
-          Tempest::Log::e("[phoenix] ", message);
+        case zenkit::LogLevel::ERROR:
+          Tempest::Log::e("[zenkit] ", message);
           break;
-        case phoenix::logging::level::warn:
-          Tempest::Log::e("[phoenix] ", message);
+        case zenkit::LogLevel::WARNING:
+          Tempest::Log::e("[zenkit] ", message);
           break;
-        case phoenix::logging::level::info:
-          Tempest::Log::i("[phoenix] ", message);
+        case zenkit::LogLevel::INFO:
+          Tempest::Log::i("[zenkit] ", message);
           break;
-        case phoenix::logging::level::debug:
-          Tempest::Log::d("[phoenix] ", message);
+        case zenkit::LogLevel::DEBUG:
+        case zenkit::LogLevel::TRACE:
+          Tempest::Log::d("[zenkit] ", message); // unused
           break;
         }
       });
@@ -99,8 +112,7 @@ int main(int argc,const char** argv) {
   CommandLine          cmd{argc,argv};
   auto                 api     = mkApi(cmd);
   const auto           gpuName = selectDevice(*api);
-  if(gpuName!=nullptr)
-    CrashLog::setGpu(gpuName);
+  CrashLog::setGpu(gpuName);
 
   Tempest::Device      device{*api,gpuName};
   CrashLog::setGpu(device.properties().name);

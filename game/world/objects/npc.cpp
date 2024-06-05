@@ -77,7 +77,7 @@ void Npc::GoTo::setFlee() {
 
 struct Npc::TransformBack {
   TransformBack(Npc& self) {
-    hnpc        = std::make_shared<phoenix::c_npc>(*self.hnpc);
+    hnpc        = std::make_shared<zenkit::INpc>(*self.hnpc);
     invent      = std::move(self.invent);
     self.invent = Inventory(); // cleanup
 
@@ -94,8 +94,8 @@ struct Npc::TransformBack {
     skeleton = self.visual.visualSkeleton();
     }
 
-  TransformBack(Npc& owner, phoenix::vm& vm, Serialize& fin) {
-    hnpc           = std::make_shared<phoenix::c_npc>();
+  TransformBack(Npc& owner, zenkit::DaedalusVm& vm, Serialize& fin) {
+    hnpc           = std::make_shared<zenkit::INpc>();
     hnpc->user_ptr = this;
     fin.readNpc(vm, hnpc);
     invent.load(fin,owner);
@@ -108,7 +108,7 @@ struct Npc::TransformBack {
     }
 
   void undo(Npc& self) {
-    int32_t aivar[phoenix::c_npc::aivar_count]={};
+    int32_t aivar[zenkit::INpc::aivar_count]={};
 
     auto exp      = self.hnpc->exp;
     auto exp_next = self.hnpc->exp_next;
@@ -143,7 +143,7 @@ struct Npc::TransformBack {
     fout.write(skeleton!=nullptr ? skeleton->name() : "");
     }
 
-  std::shared_ptr<phoenix::c_npc> hnpc={};
+  std::shared_ptr<zenkit::INpc>   hnpc={};
   Inventory                       invent;
   int32_t                         talentsSk[TALENT_MAX_G2]={};
   int32_t                         talentsVl[TALENT_MAX_G2]={};
@@ -160,7 +160,7 @@ Npc::Npc(World &owner, size_t instance, std::string_view waypoint)
   :owner(owner),mvAlgo(*this) {
   outputPipe          = owner.script().openAiOuput();
 
-  hnpc = std::make_shared<phoenix::c_npc>();
+  hnpc = std::make_shared<zenkit::INpc>();
   hnpc->user_ptr        = this;
 
   if(instance==size_t(-1))
@@ -168,9 +168,6 @@ Npc::Npc(World &owner, size_t instance, std::string_view waypoint)
 
   owner.script().initializeInstanceNpc(hnpc, instance);
   hnpc->wp       = std::string(waypoint);
-  if(hnpc->attribute[ATR_HITPOINTS]<=1 && hnpc->attribute[ATR_HITPOINTSMAX]<=1) {
-    onNoHealth(true,HS_NoSound);
-    }
   }
 
 Npc::~Npc(){
@@ -227,7 +224,7 @@ void Npc::save(Serialize &fout, size_t id) {
 void Npc::load(Serialize &fin, size_t id) {
   fin.setEntry("worlds/",fin.worldName(),"/npc/",id,"/data");
 
-  hnpc = std::make_shared<phoenix::c_npc>();
+  hnpc = std::make_shared<zenkit::INpc>();
   hnpc->user_ptr        = this;
   fin.readNpc(owner.script().getVm(), hnpc);
   fin.read(body,head,vHead,vTeeth,bdColor,vColor,bdFatness);
@@ -445,13 +442,14 @@ bool Npc::resetPositionToTA() {
       return false;
     }
 
-  invent.clearSlot(*this,"",false);
+  invent.clearSlot(*this,"",currentInteract!=nullptr);
+  if(!isPlayer())
+    setInteraction(nullptr,true);
+
   if(routines.size()==0)
     return true;
 
   attachToPoint(nullptr);
-  if(!isPlayer())
-    setInteraction(nullptr,true);
   clearAiQueue();
 
   if(!isDead) {
@@ -461,32 +459,8 @@ bool Npc::resetPositionToTA() {
 
   auto& rot = currentRoutine();
   auto  at  = rot.point;
-
-  if(at==nullptr) {
-    const auto time  = owner.time().timeInDay();
-    const auto day   = gtime(24,0).toInt();
-    int64_t    delta = std::numeric_limits<int64_t>::max();
-
-    // closest time-point
-    for(auto& i:routines) {
-      int64_t d=0;
-      if(i.start<i.end) {
-        d = time.toInt()-i.start.toInt();
-        } else {
-        d = time.toInt()-i.end.toInt();
-        }
-      if(d<=0)
-        d+=day;
-
-      if(i.point && d<delta) {
-        at    = i.point;
-        delta = d;
-        }
-      }
-
-    if(at==nullptr)
-      return false;
-    }
+  if(at==nullptr)
+    return false;
 
   if(at->isLocked() && !isDead){
     auto p = owner.findNextPoint(*at);
@@ -542,13 +516,6 @@ bool Npc::checkHealth(bool onChange,bool allowUnconscious) {
 
   const int minHp = isMonster() ? 0 : 1;
   if(hnpc->attribute[ATR_HITPOINTS]<=minHp) {
-    if(hnpc->attribute[ATR_HITPOINTSMAX]<=1) {
-      size_t fdead=owner.script().findSymbolIndex("ZS_Dead");
-      startState(fdead,"");
-      physic.setEnable(false);
-      return false;
-      }
-
     if(currentOther==nullptr ||
        !allowUnconscious ||
        owner.script().personAttitude(*this,*currentOther)==ATT_HOSTILE ||
@@ -612,6 +579,7 @@ bool Npc::hasAutoroll() const {
 void Npc::stopWalkAnimation() {
   if(interactive()==nullptr)
     visual.stopWalkAnim(*this);
+  // go2.clear();
   setAnimRotate(0);
   }
 
@@ -700,6 +668,10 @@ float Npc::qDistTo(float x1, float y1, float z1) const {
   return dx*dx+dy*dy+dz*dz;
   }
 
+float Npc::qDistTo(const Tempest::Vec3 pos) const {
+  return qDistTo(pos.x,pos.y,pos.z);
+  }
+
 float Npc::qDistTo(const WayPoint *f) const {
   if(f==nullptr)
     return 0.f;
@@ -712,12 +684,12 @@ float Npc::qDistTo(const Npc &p) const {
 
 float Npc::qDistTo(const Interactive &p) const {
   auto pos = p.nearestPoint(*this);
-  return qDistTo(pos.x,pos.y,pos.z);
+  return qDistTo(pos);
   }
 
 float Npc::qDistTo(const Item& p) const {
   auto pos = p.midPosition();
-  return qDistTo(pos.x,pos.y,pos.z);
+  return qDistTo(pos);
   }
 
 uint8_t Npc::calcAniComb() const {
@@ -833,6 +805,7 @@ Tempest::Vec3 Npc::animMoveSpeed(uint64_t dt) const {
 
 void Npc::setVisual(const Skeleton* v) {
   visual.setVisual(v);
+  invalidateTalentOverlays();
   }
 
 void Npc::setVisualBody(int32_t headTexNr, int32_t teethTexNr, int32_t bodyTexNr, int32_t bodyTexColor,
@@ -1029,6 +1002,10 @@ bool Npc::isFalling() const {
   return mvAlgo.isFalling();
   }
 
+bool Npc::isFallingDeep() const {
+  return mvAlgo.isInAir() && (visual.pose().isInAnim("S_FALL") || visual.pose().isInAnim("S_FALLB"));
+  }
+
 bool Npc::isSlide() const {
   return mvAlgo.isSlide();
   }
@@ -1037,13 +1014,19 @@ bool Npc::isInAir() const {
   return mvAlgo.isInAir();
   }
 
-void Npc::setTalentSkill(Talent t, int32_t lvl) {
-  if(t>=TALENT_MAX_G2)
+void Npc::invalidateTalentOverlays() {
+  const Talent tl[] = {TALENT_1H, TALENT_2H, TALENT_BOW, TALENT_CROSSBOW, TALENT_ACROBAT};
+  for(Talent i:tl) {
+    invalidateTalentOverlays(i);
+    }
+  }
+
+void Npc::invalidateTalentOverlays(Talent t) {
+  const auto scheme = visual.visualSkeletonScheme();
+  if(scheme.empty())
     return;
 
-  talentsSk[t] = lvl;
-
-  auto scheme = visual.visualSkeletonScheme();
+  const auto lvl = talentsSk[t];
   if(t==TALENT_1H){
     if(lvl==0){
       delOverlay(string_frm(scheme,"_1HST1.MDS"));
@@ -1107,6 +1090,13 @@ void Npc::setTalentSkill(Talent t, int32_t lvl) {
     }
   }
 
+void Npc::setTalentSkill(Talent t, int32_t lvl) {
+  if(t>=TALENT_MAX_G2)
+    return;
+  talentsSk[t] = lvl;
+  invalidateTalentOverlays(t);
+  }
+
 int32_t Npc::talentSkill(Talent t) const {
   if(t<TALENT_MAX_G2)
     return talentsSk[t];
@@ -1125,7 +1115,7 @@ int32_t Npc::talentValue(Talent t) const {
   }
 
 int32_t Npc::hitChance(Talent t) const {
-  if(t<=phoenix::c_npc::hitchance_count)
+  if(t<=zenkit::INpc::hitchance_count)
     return hnpc->hitchance[t];
   return 0;
   }
@@ -1155,6 +1145,12 @@ int32_t Npc::attribute(Attribute a) const {
 void Npc::changeAttribute(Attribute a, int32_t val, bool allowUnconscious) {
   if(a>=ATR_MAX || val==0)
     return;
+  if(val<0 && a==ATR_HITPOINTS) {
+    if(isPlayer() && Gothic::inst().isGodMode())
+      return;
+    if(isImmortal())
+      return;
+    }
 
   hnpc->attribute[a]+=val;
   if(hnpc->attribute[a]<0)
@@ -1237,8 +1233,8 @@ void Npc::setAttitude(Attitude att) {
 
 bool Npc::isFriend() const {
   bool g2 = owner.version().game==2;
-  return ( g2 && hnpc->type==phoenix::npc_type::g2_friend) ||
-         (!g2 && hnpc->type==phoenix::npc_type::g1_friend);
+  return ( g2 && hnpc->type==zenkit::NpcType::G2_FRIEND) ||
+         (!g2 && hnpc->type==zenkit::NpcType::G1_FRIEND);
   }
 
 void Npc::setTempAttitude(Attitude att) {
@@ -1374,8 +1370,11 @@ bool Npc::implGoTo(uint64_t dt, float destDist) {
         finished = false;
         }
       }
-    if(finished)
+    if(finished) {
+      if(go2.flag==Npc::GT_NextFp && implTurnTo(go2.wp->dirX,go2.wp->dirZ,false,dt))
+        return true;
       clearGoTo();
+      }
     } else {
     if(setGoToLadder()) {
       mvAlgo.tick(dt);
@@ -1413,7 +1412,13 @@ bool Npc::implAttack(uint64_t dt) {
   if(!fghAlgo.hasInstructions())
     return false;
 
-  if(bodyStateMasked()==BS_STUMBLE) {
+  const auto bs = bodyStateMasked();
+  if(bs==BS_LIE) {
+    setAnim(Npc::Anim::Idle);
+    mvAlgo.tick(dt,MoveAlgo::FaiMove);
+    return true;
+    }
+  if(bs==BS_STUMBLE || bs==BS_LIE || isInAir()) {
     mvAlgo.tick(dt,MoveAlgo::FaiMove);
     return true;
     }
@@ -1426,7 +1431,7 @@ bool Npc::implAttack(uint64_t dt) {
 
   auto ws = weaponState();
   // vanilla behavior, required for orcs in G1 orcgraveyard
-  if(ws==WeaponState::NoWeapon) {
+  if(ws==WeaponState::NoWeapon && isAiQueueEmpty()) {
     if(drawWeaponMelee())
       return true;
     }
@@ -1454,8 +1459,7 @@ bool Npc::implAttack(uint64_t dt) {
     }
 
   if(act==FightAlgo::MV_ATTACK || act==FightAlgo::MV_ATTACKL || act==FightAlgo::MV_ATTACKR) {
-    if(!canSeeNpc(*currentTarget,false)) {
-      const auto bs = bodyStateMasked();
+    if(canSenseNpc(*currentTarget,false)==SensesBit::SENSE_NONE) {
       if(bs==BS_RUN)
         setAnim(Npc::Anim::Idle); else
         adjustAttackRotation(dt);
@@ -1477,7 +1481,9 @@ bool Npc::implAttack(uint64_t dt) {
         auto hit = owner.physic()->rayNpc(this->mapWeaponBone(),currentTarget->centerPosition());
         if(hit.hasCol && hit.npcHit!=currentTarget) {
           obsticle = true;
-          if(hit.npcHit!=nullptr && owner.script().personAttitude(*this,*hit.npcHit)==ATT_HOSTILE)
+          // if(hit.npcHit!=nullptr && owner.script().personAttitude(*this,*hit.npcHit)==ATT_HOSTILE)
+          //   obsticle = false;
+          if(hit.npcHit!=nullptr && hit.npcHit!=currentTarget && owner.script().isFriendlyFire(*this,*hit.npcHit))
             obsticle = false;
           }
         }
@@ -1513,7 +1519,6 @@ bool Npc::implAttack(uint64_t dt) {
         }
       }
     else if(ws==WeaponState::Fist) {
-      const auto bs = bodyStateMasked();
       if(doAttack(Anim::Attack,BS_HIT) || mvAlgo.isSwim() || mvAlgo.isDive()) {
         uint64_t aniTime = visual.pose().atkTotalTime()+1;
         implFaiWait(aniTime);
@@ -1523,7 +1528,6 @@ bool Npc::implAttack(uint64_t dt) {
         }
       }
     else {
-      const auto bs = bodyStateMasked();
       if(doAttack(ani[act-FightAlgo::MV_ATTACK],BS_HIT)) {
         uint64_t aniTime = visual.pose().atkTotalTime()+1;
         implFaiWait(aniTime);
@@ -1569,6 +1573,8 @@ bool Npc::implAttack(uint64_t dt) {
 
   if(act==FightAlgo::MV_MOVEA || act==FightAlgo::MV_MOVEG ||
       act==FightAlgo::MV_TURNA || act==FightAlgo::MV_TURNG) {
+    if(!isAiQueueEmpty() && implAiTick(dt))
+      return true;
     go2.set(currentTarget,(act==FightAlgo::MV_MOVEG || act==FightAlgo::MV_TURNG) ?
                              GoToHint::GT_EnemyG : GoToHint::GT_EnemyA);
 
@@ -1582,6 +1588,7 @@ bool Npc::implAttack(uint64_t dt) {
 
     const bool isClose = (qDistTo(*currentTarget) < dist*dist);
     if((!isClose && implGoTo(dt)) || implTurnTo(*currentTarget,dt)) {
+      go2.clear();
       implAiTick(dt);
       return true;
       }
@@ -1666,7 +1673,7 @@ void Npc::implSetFightMode(const Animation::EvCount& ev) {
     return;
 
   auto ws = visual.fightMode();
-  if(ev.weaponCh==phoenix::mds::event_fight_mode::none && (ws==WeaponState::W1H || ws==WeaponState::W2H)) {
+  if(ev.weaponCh==zenkit::MdsFightMode::NONE && (ws==WeaponState::W1H || ws==WeaponState::W2H)) {
     if(auto melee = invent.currentMeleeWeapon()) {
       if(melee->handle().material==ItemMaterial::MAT_METAL)
         sfxWeapon = ::Sound(owner,::Sound::T_Regular,"UNDRAWSOUND_ME.WAV",{x,y+translateY(),z},2500,false); else
@@ -1674,7 +1681,7 @@ void Npc::implSetFightMode(const Animation::EvCount& ev) {
       sfxWeapon.play();
       }
     }
-  else if(ev.weaponCh==phoenix::mds::event_fight_mode::one_handed || ev.weaponCh==phoenix::mds::event_fight_mode::two_handed) {
+  else if(ev.weaponCh==zenkit::MdsFightMode::SINGLE_HANDED || ev.weaponCh==zenkit::MdsFightMode::DUAL_HANDED) {
     if(auto melee = invent.currentMeleeWeapon()) {
       if(melee->handle().material==ItemMaterial::MAT_METAL)
         sfxWeapon = ::Sound(owner,::Sound::T_Regular,"DRAWSOUND_ME.WAV",{x,y+translateY(),z},2500,false); else
@@ -1682,7 +1689,7 @@ void Npc::implSetFightMode(const Animation::EvCount& ev) {
       sfxWeapon.play();
       }
     }
-  else if(ev.weaponCh==phoenix::mds::event_fight_mode::bow || ev.weaponCh==phoenix::mds::event_fight_mode::crossbow) {
+  else if(ev.weaponCh==zenkit::MdsFightMode::BOW || ev.weaponCh==zenkit::MdsFightMode::CROSSBOW) {
     sfxWeapon = ::Sound(owner,::Sound::T_Regular,"DRAWSOUND_BOW",{x,y+translateY(),z},2500,false);
     sfxWeapon.play();
     }
@@ -1695,6 +1702,9 @@ bool Npc::implAiFlee(uint64_t dt) {
   if(currentTarget==nullptr)
     return true;
 
+  if(isFalling())
+    return true;
+
   auto& oth = *currentTarget;
 
   const WayPoint* wp      = nullptr;
@@ -1705,7 +1715,7 @@ bool Npc::implAiFlee(uint64_t dt) {
       return false;
     if(p.underWater)
       return false;
-    if(!canSeeNpc(p.x,p.y+10,p.z,true))
+    if(!canRayHitPoint(p.position() + Vec3(0,10,0),true))
       return false;
     if(wp==nullptr || oth.qDistTo(&p)>oth.qDistTo(wp))
       wp = &p;
@@ -1814,7 +1824,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     auto& spl  = owner.script().spellDesc(splId);
     splCat     = SpellCategory(spl.spell_type);
     damageType = spl.damage_type;
-    for(size_t i=0; i<phoenix::damage_type::count; ++i)
+    for(size_t i=0; i<zenkit::DamageType::NUM; ++i)
       if((damageType&(1<<i))!=0)
         dmg[i] = spl.damage_per_level;
     }
@@ -1842,7 +1852,10 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
         visual.setAnimRotate(*this,0);
         visual.interrupt(); // TODO: put down in pipeline, at Pose and merge with setAnimAngGet
         }
-      setAnimAngGet(lastHitType=='A' ? Anim::StumbleA : Anim::StumbleB);
+
+      if(damageType & (1<<zenkit::DamageType::FLY))
+        setAnimAngGet(lastHitType=='A' ? Anim::FallDeepA : Anim::FallDeepB); else
+        setAnimAngGet(lastHitType=='A' ? Anim::StumbleA : Anim::StumbleB);
       }
     }
 
@@ -1866,8 +1879,37 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
       }
     }
 
-  if(damageType & (1<<phoenix::damage_type::fly))
+  if((damageType & (1<<zenkit::DamageType::FLY)) && !isLie()) {
     mvAlgo.accessDamFly(x-other.x,z-other.z); // throw enemy
+    }
+  }
+
+void Npc::takeFallDamage(const Vec3& fallSpeed) {
+  if(bodyStateMasked()==BS_FALL) {
+    if(!isFallingDeep()) {
+      // small fall
+      setAnim(Anim::Idle);
+      } else {
+      const float a  = angleDir(-fallSpeed.x,-fallSpeed.z);
+      const float da = a-angle;
+      if(std::cos(da*M_PI/180.0)<0 || Vec2(fallSpeed.x,fallSpeed.z).length()<0.1f)
+        lastHitType='A'; else
+        lastHitType='B';
+      setAnim(lastHitType=='A' ? Anim::FallenA : Anim::FallenB);
+      }
+    }
+  auto dmg = DamageCalculator::damageFall(*this,fallSpeed.length());
+  if(!dmg.hasHit)
+    return;
+  int32_t hp = attribute(ATR_HITPOINTS);
+  if(hp>dmg.value) {
+    emitSoundSVM("SVM_%d_AARGH");
+    }
+  changeAttribute(ATR_HITPOINTS,-dmg.value,false);
+  }
+
+void Npc::takeDrownDamage() {
+  changeAttribute(Attribute::ATR_HITPOINTS, -attribute(Attribute::ATR_HITPOINTSMAX), false);
   }
 
 Npc *Npc::updateNearestEnemy() {
@@ -1877,7 +1919,7 @@ Npc *Npc::updateNearestEnemy() {
   Npc*  ret  = nullptr;
   float dist = std::numeric_limits<float>::max();
   if(nearestEnemy!=nullptr &&
-     (!nearestEnemy->isDown() && (canSenseNpc(*nearestEnemy,true)&SensesBit::SENSE_SEE)!=SensesBit::SENSE_NONE)) {
+     (!nearestEnemy->isDown() && canSenseNpc(*nearestEnemy,true)!=SensesBit::SENSE_NONE)) {
     ret  = nearestEnemy;
     dist = qDistTo(*ret);
     }
@@ -1887,7 +1929,7 @@ Npc *Npc::updateNearestEnemy() {
       return;
 
     float d = qDistTo(n);
-    if(d<dist && (canSenseNpc(n,true)&SensesBit::SENSE_SEE)!=SensesBit::SENSE_NONE) {
+    if(d<dist && canSenseNpc(n,true)!=SensesBit::SENSE_NONE) {
       ret  = &n;
       dist = d;
       }
@@ -1908,7 +1950,7 @@ Npc* Npc::updateNearestBody() {
       return;
 
     float d = qDistTo(n);
-    if(d<dist && (canSenseNpc(n,true)&SensesBit::SENSE_SEE)!=SensesBit::SENSE_NONE) {
+    if(d<dist && canSenseNpc(n,true)!=SensesBit::SENSE_NONE) {
       ret  = &n;
       dist = d;
       }
@@ -1926,24 +1968,24 @@ void Npc::tickTimedEvt(Animation::EvCount& ev) {
 
   for(auto& i:ev.timed) {
     switch(i.def) {
-      case phoenix::mds::event_tag_type::create_item: {
+      case zenkit::MdsEventType::ITEM_CREATE: {
         if(auto it = invent.addItem(i.item,1,world())) {
           invent.putToSlot(*this,it->clsId(),i.slot[0]);
           }
         break;
         }
-      case phoenix::mds::event_tag_type::insert_item: {
+      case zenkit::MdsEventType::ITEM_INSERT: {
         invent.putCurrentToSlot(*this,i.slot[0]);
         break;
         }
-      case phoenix::mds::event_tag_type::remove_item:
-      case phoenix::mds::event_tag_type::destroy_item: {
-        invent.clearSlot(*this, "", i.def != phoenix::mds::event_tag_type::remove_item);
+      case zenkit::MdsEventType::ITEM_REMOVE:
+      case zenkit::MdsEventType::ITEM_DESTROY: {
+        invent.clearSlot(*this, "", i.def != zenkit::MdsEventType::ITEM_REMOVE);
         break;
         }
-      case phoenix::mds::event_tag_type::place_item:
+      case zenkit::MdsEventType::ITEM_PLACE:
         break;
-      case phoenix::mds::event_tag_type::exchange_item: {
+      case zenkit::MdsEventType::ITEM_EXCHANGE: {
         if(!invent.clearSlot(*this,i.slot[0],true)) {
           // fallback for cooking animations
           invent.putCurrentToSlot(*this,i.slot[0]);
@@ -1954,9 +1996,9 @@ void Npc::tickTimedEvt(Animation::EvCount& ev) {
           }
         break;
         }
-      case phoenix::mds::event_tag_type::fight_mode:
+      case zenkit::MdsEventType::SET_FIGHT_MODE:
         break;
-      case phoenix::mds::event_tag_type::place_munition: {
+      case zenkit::MdsEventType::MUNITION_PLACE: {
         auto active=invent.activeWeapon();
         if(active!=nullptr) {
           const int32_t munition = active->handle().munition;
@@ -1964,40 +2006,40 @@ void Npc::tickTimedEvt(Animation::EvCount& ev) {
           }
         break;
         }
-      case phoenix::mds::event_tag_type::remove_munition: {
+      case zenkit::MdsEventType::MUNITION_REMOVE: {
         invent.putAmmunition(*this,0,"");
         break;
         }
-      case phoenix::mds::event_tag_type::draw_torch:
+      case zenkit::MdsEventType::TORCH_DRAW:
         setTorch(true);
         break;
-      case phoenix::mds::event_tag_type::inventory_torch:
+      case zenkit::MdsEventType::TORCH_INVENTORY:
         processDefInvTorch();
         break;
-      case phoenix::mds::event_tag_type::drop_torch:
+      case zenkit::MdsEventType::TORCH_DROP:
         dropTorch();
         break;
-      case phoenix::mds::event_tag_type::draw_sound:
+      case zenkit::MdsEventType::SOUND_DRAW:
         break;
-      case phoenix::mds::event_tag_type::undraw_sound:
+      case zenkit::MdsEventType::SOUND_UNDRAW:
         break;
-      case phoenix::mds::event_tag_type::swap_mesh:
+      case zenkit::MdsEventType::MESH_SWAP:
         break;
-      case phoenix::mds::event_tag_type::hit_limb:
+      case zenkit::MdsEventType::HIT_LIMB:
         break;
-      case phoenix::mds::event_tag_type::hit_direction:
+      case zenkit::MdsEventType::HIT_DIRECTION:
         break;
-      case phoenix::mds::event_tag_type::dam_multiply:
+      case zenkit::MdsEventType::DAMAGE_MULTIPLIER:
         break;
-      case phoenix::mds::event_tag_type::par_frame:
+      case zenkit::MdsEventType::PARRY_FRAME:
         break;
-      case phoenix::mds::event_tag_type::opt_frame:
+      case zenkit::MdsEventType::OPTIMAL_FRAME:
         break;
-      case phoenix::mds::event_tag_type::hit_end:
+      case zenkit::MdsEventType::HIT_END:
         break;
-      case phoenix::mds::event_tag_type::window:
+      case zenkit::MdsEventType::COMBO_WINDOW:
         break;
-      case phoenix::mds::event_tag_type::unknown:
+      case zenkit::MdsEventType::UNKNOWN:
         break;
       }
     }
@@ -2032,7 +2074,7 @@ void Npc::tickAnimationTags() {
   for(auto& i:ev.morph)
     visual.startMMAnim(*this,i.anim,i.node);
   if(ev.groundSounds>0 && isPlayer() && (bodyStateMasked()!=BodyState::BS_SNEAK))
-    world().sendPassivePerc(*this,*this,*this,PERC_ASSESSQUIETSOUND);
+    world().sendImmediatePerc(*this,*this,*this,PERC_ASSESSQUIETSOUND);
   if(ev.def_opt_frame>0)
     commitDamage();
   implSetFightMode(ev);
@@ -2040,12 +2082,19 @@ void Npc::tickAnimationTags() {
   }
 
 void Npc::tick(uint64_t dt) {
+  // if(!isPlayer() && hnpc->id!=323)
+  //   return;
+  static bool dbg = false;
+  static int  kId = -1;
+  if(dbg && !isPlayer() && hnpc->id!=kId)
+    return;
+
   tickAnimationTags();
 
   if(!visual.pose().hasAnim())
     setAnim(AnimationSolver::Idle);
 
-  if(isDive() && !(isPlayer() && Gothic::inst().isGodMode())) {
+  if(isDive()) {
     uint32_t gl = guild();
     int32_t  v  = world().script().guildVal().dive_time[gl]*1000;
     int32_t  t  = diveTime();
@@ -2098,6 +2147,8 @@ void Npc::tick(uint64_t dt) {
   }
 
 void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
+  if(isInAir())
+    return;
   if(queue.size()==0)
     return;
   auto act = queue.pop();
@@ -2116,12 +2167,12 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
     case AI_TurnToNpc: {
       const auto st = bodyStateMasked();
       if(interactive()==nullptr && (st==BS_WALK || st==BS_SNEAK)) {
-        visual.stopWalkAnim(*this);
+        stopWalkAnimation();
         queue.pushFront(std::move(act));
         break;
         }
       if(interactive()==nullptr) {
-        visual.stopWalkAnim(*this);
+        stopWalkAnimation();
         visual.stopDlgAnim(*this);
         }
       if(act.target!=nullptr && implTurnTo(*act.target,dt)) {
@@ -2151,7 +2202,7 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
         }
       auto fp = owner.findNextFreePoint(*this,act.s0);
       if(fp!=nullptr) {
-        currentFp       = nullptr;
+        currentFp       = fp;
         currentFpLock   = FpLock(*fp);
         go2.set(fp,GoToHint::GT_NextFp);
         wayPath.clear();
@@ -2187,7 +2238,6 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
         if(closeWeapon(false)) {
           stopWalkAnimation();
           }
-
         auto ws = weaponState();
         if(ws!=WeaponState::NoWeapon){
           queue.pushFront(std::move(act));
@@ -2230,7 +2280,8 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
       implAiWait(uint64_t(act.i0));
       break;
     case AI_StandUp:
-    case AI_StandUpQuick:
+    case AI_StandUpQuick: {
+      const auto bs = bodyStateMasked();
       // NOTE: B_ASSESSTALK calls AI_StandUp, to make npc stand, if it's not on a chair or something
       if(interactive()!=nullptr) {
         if((interactive()->isLadder() && !isPlayer()) || !setInteraction(nullptr,false)) {
@@ -2238,17 +2289,18 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
           }
         break;
         }
-      else if(bodyStateMasked()==BS_UNCONSCIOUS) {
+      else if(bs==BS_UNCONSCIOUS || bs==BS_LIE) {
         if(!setAnim(Anim::Idle))
           queue.pushFront(std::move(act)); else
           implAniWait(visual.pose().animationTotalTime());
         }
-      else if(bodyStateMasked()!=BS_DEAD) {
+      else if(bs!=BS_DEAD) {
         visual.stopAnim(*this,"");
         setStateItem(MeshObjects::Mesh(),"");
         setAnim(Anim::Idle);
         }
       break;
+      }
     case AI_EquipArmor:
       invent.equipArmour(act.i0,*this);
       break;
@@ -2279,11 +2331,17 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
         break;
         }
 
-      if(inter!=currentInteract) {
+      if(currentInteract!=nullptr && inter!=currentInteract) {
+        setInteraction(nullptr);
+        queue.pushFront(std::move(act));
+        break;
+        }
+
+      if(inter!=nullptr) {
         auto pos = inter->nearestPoint(*this);
         auto dp  = pos-position();
         dp.y = 0;
-        if(dp.quadLength()>MAX_AI_USE_DISTANCE*MAX_AI_USE_DISTANCE) { // too far
+        if(currentInteract==nullptr && dp.quadLength()>MAX_AI_USE_DISTANCE*MAX_AI_USE_DISTANCE) { // too far
           go2.set(pos);
           // go to MOBSI and then complete AI_UseMob
           queue.pushFront(std::move(act));
@@ -2296,7 +2354,10 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
 
       if(currentInteract==nullptr || currentInteract->stateId()!=act.i0) {
         queue.pushFront(std::move(act));
+        return;
         }
+
+      go2.clear();
       break;
       }
     case AI_UseItem: {
@@ -2562,6 +2623,7 @@ bool Npc::startState(ScriptFn id, std::string_view wp, gtime endTime, bool noFin
     return true;
     }
 
+  clearAiQueue();
   clearState(noFinalize);
   if(!wp.empty())
     hnpc->wp = wp;
@@ -2626,23 +2688,23 @@ void Npc::tickRoutine() {
     return;
 
   if(aiState.started) {
-    if(aiState.loopNextTime<=owner.tickCount()){
+    if(aiState.loopNextTime<=owner.tickCount()) {
       aiState.loopNextTime+=1000; // one tick per second?
-      int loop = 0;
+      int loop = LOOP_CONTINUE;
       if(aiState.funcLoop.isValid()) {
         loop = owner.script().invokeState(this,currentOther,currentVictum,aiState.funcLoop);
         } else {
-        // ZS_DEATH   have no looping, in G1, G2 classic
-        // ZS_GETMEAT have no looping, at all
+        // ZS_DEATH   have no loop-function, in G1, G2-classic
+        // ZS_GETMEAT have no loop-function, in G2-notr
         loop = owner.version().hasZSStateLoop() ? 1 : 0;
         }
 
       if(aiState.eTime<=owner.time()) {
         if(!isTalk()) {
-          loop=1; // have to hack ZS_Talk bugs
+          loop = LOOP_END; // have to hack ZS_Talk bugs
           }
         }
-      if(loop!=0) {
+      if(loop!=LOOP_CONTINUE) {
         clearState(false);
         currentOther  = nullptr;
         currentVictum = nullptr;
@@ -2747,7 +2809,7 @@ void Npc::commitSpell() {
   if(active->isSpellShoot()) {
     const int lvl = (castLevel-CS_Emit_0)+1;
     DamageCalculator::Damage dmg={};
-    for(size_t i=0; i<phoenix::damage_type::count; ++i)
+    for(size_t i=0; i<zenkit::DamageType::NUM; ++i)
       if((spl.damage_type&(1<<i))!=0) {
         dmg[i] = spl.damage_per_level*lvl;
         }
@@ -2809,12 +2871,32 @@ void Npc::commitSpell() {
 const Npc::Routine& Npc::currentRoutine() const {
   auto time = owner.time();
   time = gtime(int32_t(time.hour()),int32_t(time.minute()));
-  for(auto& i:routines){
+  for(auto& i:routines) {
+    if(i.point==nullptr)
+      continue;
     if(i.end<i.start && (time<i.end || i.start<=time))
       return i;
     if(i.start<=time && time<i.end)
       return i;
     }
+
+  // take previous routine
+  const auto     day   = gtime(24,0).toInt();
+  const Routine* prevR = nullptr;
+  int64_t        delta = std::numeric_limits<int64_t>::max();
+  time = time.timeInDay();
+  for(auto& i:routines) {
+    int64_t d = time.toInt() - i.end.toInt();
+    if(d<0)
+      d += day;
+    if(i.point && d<=delta && d>0) {
+      prevR = &i;
+      delta = d;
+      }
+    }
+
+  if(prevR!=nullptr)
+    return *prevR;
 
   static Routine r;
   return r;
@@ -2824,16 +2906,13 @@ gtime Npc::endTime(const Npc::Routine &r) const {
   auto wtime = owner.time();
   auto time  = gtime(int32_t(wtime.hour()),int32_t(wtime.minute()));
 
-  if(r.end<r.start){
-    if(r.start<=time) {
-      return gtime(wtime.day()+1,r.end.hour(),r.end.minute());
-      }
-    if(time<r.end) {
+  if(r.end<r.start) {
+    if(time<r.end)
       return gtime(wtime.day(),r.end.hour(),r.end.minute());
-      }
+    return gtime(wtime.day()+1,r.end.hour(),r.end.minute());
     }
-  if(r.start<=time && time<r.end) {
-    if(r.end.hour()==0)
+  if(r.start<r.end) {
+    if(r.end.hour()==0 || r.end<time)
       return gtime(wtime.day()+1,r.end.hour(),r.end.minute()); else
       return gtime(wtime.day(),r.end.hour(),r.end.minute());
     }
@@ -2967,7 +3046,7 @@ Item* Npc::takeItem(Item& item) {
     return nullptr;
 
   it = addItem(std::move(ptr));
-  if(isPlayer() && it!=nullptr) // && (it->handle().owner!=0 || it->handle().ownerGuild!=0))
+  if(isPlayer() && it!=nullptr)
     owner.sendPassivePerc(*this,*this,*this,*it,PERC_ASSESSTHEFT);
 
   implAniWait(uint64_t(sq->totalTime()));
@@ -3083,8 +3162,8 @@ Vec3 Npc::mapBone(std::string_view bone) const {
   return ret+position();
   }
 
-bool Npc::turnTo(float dx, float dz, bool anim, uint64_t dt) {
-  return implTurnTo(dx,dz,anim,dt);
+bool Npc::turnTo(float dx, float dz, bool noAnim, uint64_t dt) {
+  return implTurnTo(dx,dz,noAnim,dt);
   }
 
 bool Npc::rotateTo(float dx, float dz, float step, bool noAnim, uint64_t dt) {
@@ -3109,16 +3188,16 @@ bool Npc::rotateTo(float dx, float dz, float step, bool noAnim, uint64_t dt) {
       return false;
       }
     } else {
-    visual.stopWalkAnim(*this);
+    stopWalkAnimation();
     }
 
   const auto sgn = std::sin(double(da)*M_PI/180.0);
   if(sgn<0) {
-    setAnimRotate(1);
+    setAnimRotate(noAnim ? 0 : +1);
     setDirection(angle-step);
     } else
   if(sgn>0) {
-    setAnimRotate(-1);
+    setAnimRotate(noAnim ? 0 : -1);
     setDirection(angle+step);
     } else {
     setAnimRotate(0);
@@ -3127,7 +3206,9 @@ bool Npc::rotateTo(float dx, float dz, float step, bool noAnim, uint64_t dt) {
   }
 
 bool Npc::isRotationAllowed() const {
-  return currentInteract==nullptr && !isFinishingMove() && bodyStateMasked()!=BS_CLIMB;
+  auto bs  = bodyStateMasked();
+  bool air = (!isPlayer() && isInAir()) || isFallingDeep();
+  return currentInteract==nullptr && !isFinishingMove() && bs!=BS_CLIMB && bs!=BS_LIE && !air;
   }
 
 bool Npc::checkGoToNpcdistance(const Npc &other) {
@@ -3190,6 +3271,8 @@ bool Npc::closeWeapon(bool noAnim) {
   castLevel        = CS_NoCast;
   currentSpellCast = size_t(-1);
   castNextTime     = 0;
+  if(isPlayer())
+    owner.sendPassivePerc(*this,*this,*this,PERC_ASSESSREMOVEWEAPON);
   return true;
   }
 
@@ -3262,7 +3345,7 @@ bool Npc::drawWeaponBow() {
   if(!visual.startAnim(*this,st))
     return false;
   invent.switchActiveWeapon(*this,2);
-  hnpc->weapon = (st==WeaponState::W1H ? 5:6);
+  hnpc->weapon = (st==WeaponState::Bow ? 5:6);
   return true;
   }
 
@@ -3484,13 +3567,11 @@ bool Npc::tickCast(uint64_t dt) {
 
   if(CS_Emit_0<=castLevel && castLevel<=CS_Emit_Last) {
     // final commit
-    if(isAiQueueEmpty()) {
-      if(!setAnim(Npc::Anim::Idle))
-        return true;
-      commitSpell();
-      castLevel = CS_Finalize;
-      // passthru to CS_Finalize
-      }
+    if(!setAnim(Npc::Anim::Idle))
+      return true;
+    commitSpell();
+    castLevel = CS_Finalize;
+    // passthru to CS_Finalize
     }
 
   if(castLevel==CS_Finalize) {
@@ -3648,6 +3729,10 @@ bool Npc::isDead() const {
   return owner.script().isDead(*this);
   }
 
+bool Npc::isLie() const {
+  return bodyStateMasked()==BS_LIE;
+  }
+
 bool Npc::isUnconscious() const {
   return owner.script().isUnconscious(*this);
   }
@@ -3673,7 +3758,7 @@ bool Npc::isPrehit() const {
   }
 
 bool Npc::isImmortal() const {
-  return hnpc->flags & phoenix::npc_flag::immortal;
+  return hnpc->flags & zenkit::NpcFlag::IMMORTAL;
   }
 
 void Npc::setPerceptionTime(uint64_t time) {
@@ -3712,7 +3797,7 @@ bool Npc::perceptionProcess(Npc &pl) {
     }
 
   const float quadDist = pl.qDistTo(*this);
-  if(hasPerc(PERC_ASSESSPLAYER) && (canSenseNpc(pl,false) & SensesBit::SENSE_SEE)==SensesBit::SENSE_SEE) {
+  if(hasPerc(PERC_ASSESSPLAYER) && canSenseNpc(pl,false)!=SensesBit::SENSE_NONE) {
     if(perceptionProcess(pl,nullptr,quadDist,PERC_ASSESSPLAYER)) {
       ret = true;
       }
@@ -3742,8 +3827,9 @@ bool Npc::perceptionProcess(Npc &pl) {
   }
 
 bool Npc::perceptionProcess(Npc &pl, Npc* victum, float quadDist, PercType perc) {
-  float r = float(hnpc->senses_range);
+  float r = float(world().script().percRanges().at(perc, hnpc->senses_range));
   r = r*r;
+
   if(quadDist>r)
     return false;
 
@@ -4063,19 +4149,24 @@ void Npc::stopWalking() {
   if(setAnim(Anim::Idle))
     return;
   // hard stop
-  visual.stopWalkAnim(*this);
+  stopWalkAnimation();
   }
 
 bool Npc::canSeeNpc(const Npc &oth, bool freeLos) const {
   const auto mid = oth.bounds().midTr;
-  if(canSeeNpc(mid.x,mid.y,mid.z,freeLos))
+  if(canSeeNpc(mid,freeLos))
     return true;
+  const auto ppos = oth.physic.position();
+  if(oth.isDown() && canSeeNpc(ppos,freeLos)) {
+    // mid of dead npc may endedup inside a wall; extra check for physical center
+    return true;
+    }
   if(oth.visual.visualSkeleton()==nullptr)
     return false;
   if(oth.visual.visualSkeleton()->BIP01_HEAD==size_t(-1))
     return false;
   auto head = oth.visual.mapHeadBone();
-  if(canSeeNpc(head.x,head.y,head.z,freeLos))
+  if(canSeeNpc(head,freeLos))
     return true;
   return false;
   }
@@ -4090,48 +4181,57 @@ bool Npc::canSeeSource() const {
   return false;
   }
 
-bool Npc::canSeeNpc(float tx, float ty, float tz, bool freeLos) const {
-  SensesBit s = canSenseNpc(tx,ty,tz,freeLos,false);
-  return int32_t(s&SensesBit::SENSE_SEE)!=0;
+bool Npc::canSeeNpc(const Vec3 pos, bool freeLos) const {
+  return canRayHitPoint(pos, freeLos);
+  }
+
+bool Npc::canRayHitPoint(const Tempest::Vec3 pos, bool freeLos, float extRange) const {
+  const float range = float(hnpc->senses_range) + extRange;
+  if(qDistTo(pos)>range*range)
+    return false;
+
+  static const double ref = std::cos(100*M_PI/180.0); // spec requires +-100 view angle range
+  const DynamicWorld* w   = owner.physic();
+  // npc eyesight height
+  auto head = visual.mapHeadBone();
+  if(freeLos) {
+    return !w->ray(head, pos).hasCol;
+    }
+
+  float dx  = x-pos.x, dz=z-pos.z;
+  float dir = angleDir(dx,dz);
+  float da  = float(M_PI)*(visual.viewDirection()-dir)/180.f;
+  if(double(std::cos(da))<=ref) {
+    if(!w->ray(head, pos).hasCol)
+      return true;
+    }
+  return false;
   }
 
 SensesBit Npc::canSenseNpc(const Npc &oth, bool freeLos, float extRange) const {
   const auto mid     = oth.bounds().midTr;
-  const bool isNoisy = (oth.bodyStateMasked()!=BodyState::BS_SNEAK);
-  return canSenseNpc(mid.x,mid.y,mid.z,freeLos,isNoisy,extRange);
+  const auto st      = oth.bodyStateMasked();
+  // https://github.com/Try/OpenGothic/pull/589#issuecomment-2045897394
+  const bool isNoisy = (st!=BodyState::BS_SNEAK && oth.isPlayer());
+  return canSenseNpc(mid,freeLos,isNoisy,extRange);
   }
 
-SensesBit Npc::canSenseNpc(float tx, float ty, float tz, bool freeLos, bool isNoisy, float extRange) const {
-  DynamicWorld* w = owner.physic();
-  static const double ref = std::cos(100*M_PI/180.0); // spec requires +-100 view angle range
-
+SensesBit Npc::canSenseNpc(const Tempest::Vec3 pos, bool freeLos, bool isNoisy, float extRange) const {
   const float range = float(hnpc->senses_range)+extRange;
-  if(qDistTo(tx,ty,tz)>range*range)
+  if(qDistTo(pos)>range*range)
     return SensesBit::SENSE_NONE;
 
-  SensesBit ret=SensesBit::SENSE_NONE;
-  if(owner.roomAt({tx,ty,tz})==owner.roomAt({x,y,z})) {
-    ret = ret | SensesBit::SENSE_SMELL;
-    }
+  SensesBit ret = SensesBit::SENSE_SMELL;
 
   if(isNoisy) {
     // no need to be in same room: https://github.com/Try/OpenGothic/issues/420
     ret = ret | SensesBit::SENSE_HEAR;
     }
 
-  // npc eyesight height
-  auto head = visual.mapHeadBone();
-  if(!freeLos) {
-    float dx  = x-tx, dz=z-tz;
-    float dir = angleDir(dx,dz);
-    float da  = float(M_PI)*(visual.viewDirection()-dir)/180.f;
-    if(double(std::cos(da))<=ref)
-      if(!w->ray(head, Vec3(tx,ty,tz)).hasCol)
-        ret = ret | SensesBit::SENSE_SEE;
-    } else {
-    if(!w->ray(head, Vec3(tx,ty,tz)).hasCol)
-      ret = ret | SensesBit::SENSE_SEE;
+  if((hnpc->senses & int32_t(SensesBit::SENSE_SEE))!=0 && canRayHitPoint(pos, freeLos, extRange)) {
+    ret = ret | SensesBit::SENSE_SEE;
     }
+
   return ret & SensesBit(hnpc->senses);
   }
 
@@ -4141,7 +4241,7 @@ bool Npc::canSeeItem(const Item& it, bool freeLos) const {
 
   const auto  itMid = it.midPosition();
   const float range = float(hnpc->senses_range);
-  if(qDistTo(itMid.x,itMid.y,itMid.z)>range*range)
+  if(qDistTo(itMid)>range*range)
     return false;
 
   if(!freeLos) {
@@ -4171,7 +4271,7 @@ bool Npc::canSeeItem(const Item& it, bool freeLos) const {
 
 bool Npc::isAlignedToGround() const {
   auto gl = guild();
-  return (owner.script().guildVal().surface_align[gl]!=0) || isDead();
+  return (owner.script().guildVal().surface_align[gl]!=0) || isDead() || isLie();
   }
 
 Vec3 Npc::groundNormal() const {

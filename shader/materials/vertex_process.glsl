@@ -3,44 +3,86 @@
 
 #include "common.glsl"
 
-#if defined(GL_VERTEX_SHADER)
-#if (MESH_TYPE==T_SKINING)
-layout(location = 0) in vec3 inNormal;
-layout(location = 1) in vec2 inUV;
-layout(location = 2) in uint inColor;
-layout(location = 3) in vec3 inPos0;
-layout(location = 4) in vec3 inPos1;
-layout(location = 5) in vec3 inPos2;
-layout(location = 6) in vec3 inPos3;
-layout(location = 7) in uint inId;
-layout(location = 8) in vec4 inWeight;
+struct Vertex {
+#if (MESH_TYPE==T_LANDSCAPE) || (MESH_TYPE==T_OBJ) || (MESH_TYPE==T_MORPH)
+  vec3  pos;
+  uint  color;
+  vec3  normal;
+  vec2  uv;
+#elif(MESH_TYPE==T_SKINING)
+  vec3  pos0;
+  vec3  pos1;
+  vec3  pos2;
+  vec3  pos3;
+  uvec4 boneId;
+  vec4  weight;
+  vec3  normal;
+  vec2  uv;
+  uint  color;
 #elif (MESH_TYPE==T_PFX)
-// none
+  vec3  pos;
+  vec3  normal;
+  vec2  uv;
+  vec3  size;
+  uint  bits0;
+  vec3  dir;
+  uint  color;
+#endif
+  };
+
+Vertex pullVertex(uint bucketId, uint id) {
+#if defined(BINDLESS)
+  nonuniformEXT uint vi = bucketId;
 #else
-layout(location = 0) in vec3 inPos;
-layout(location = 1) in vec3 inNormal;
-layout(location = 2) in vec2 inUV;
-layout(location = 3) in uint inColor;
+  const         uint vi = 0;
 #endif
+  Vertex ret;
+#if (MESH_TYPE==T_SKINING)
+  id *=23;
+  ret.normal = vec3(vbo[vi].vertices[id + 0], vbo[vi].vertices[id + 1], vbo[vi].vertices[id + 2]);
+  ret.uv     = vec2(vbo[vi].vertices[id + 3], vbo[vi].vertices[id + 4]);
+  ret.color  = floatBitsToUint(vbo[vi].vertices[id + 5]);
+  ret.pos0   = vec3(vbo[vi].vertices[id +  6], vbo[vi].vertices[id +  7], vbo[vi].vertices[id +  8]);
+  ret.pos1   = vec3(vbo[vi].vertices[id +  9], vbo[vi].vertices[id + 10], vbo[vi].vertices[id + 11]);
+  ret.pos2   = vec3(vbo[vi].vertices[id + 12], vbo[vi].vertices[id + 13], vbo[vi].vertices[id + 14]);
+  ret.pos3   = vec3(vbo[vi].vertices[id + 15], vbo[vi].vertices[id + 16], vbo[vi].vertices[id + 17]);
+  ret.boneId = uvec4(unpackUnorm4x8(floatBitsToUint(vbo[vi].vertices[id + 18]))*255.0);
+  ret.weight = vec4(vbo[vi].vertices[id + 19], vbo[vi].vertices[id + 20], vbo[vi].vertices[id + 21], vbo[vi].vertices[id + 22]);
+#elif (MESH_TYPE==T_LANDSCAPE) || (MESH_TYPE==T_OBJ) || (MESH_TYPE==T_MORPH)
+  id *= 9;
+  ret.pos    = vec3(vbo[vi].vertices[id + 0], vbo[vi].vertices[id + 1], vbo[vi].vertices[id + 2]);
+  ret.normal = vec3(vbo[vi].vertices[id + 3], vbo[vi].vertices[id + 4], vbo[vi].vertices[id + 5]);
+  ret.uv     = vec2(vbo[vi].vertices[id + 6], vbo[vi].vertices[id + 7]);
+  ret.color  = floatBitsToUint(vbo[vi].vertices[id + 8]);
+#else
+#error "unknown mesh type"
 #endif
+  return ret;
+  }
 
 #if (MESH_TYPE==T_MORPH)
-vec3 morphOffset(int i, uint vertexIndex) {
-  vec2  ai        = unpackUnorm2x16(push.morph[i].alpha16_intensity16);
-  float alpha     = ai.x;
-  float intensity = ai.y;
+vec3 morphOffset(uint bucketId, uint animPtr, uint vertexIndex) {
+#if defined(BINDLESS)
+  nonuniformEXT uint i = bucketId;
+#else
+  const         uint i = 0;
+#endif
+  MorphDesc md        = pullMorphDesc(animPtr);
+  vec2      ai        = unpackUnorm2x16(md.alpha16_intensity16);
+  float     alpha     = ai.x;
+  float     intensity = ai.y;
   if(intensity<=0)
     return vec3(0);
 
-  uint  vId   = vertexIndex + push.morph[i].indexOffset;
-  int   index = morphId.index[vId];
+  uint  vId   = vertexIndex + md.indexOffset;
+  int   index = morphId[i].index[vId];
   if(index<0)
     return vec3(0);
 
-  uint  f0 = push.morph[i].sample0;
-  uint  f1 = push.morph[i].sample1;
-  vec3  a  = morph.samples[f0 + index].xyz;
-  vec3  b  = morph.samples[f1 + index].xyz;
+  uint  f0 = md.sample0;
+  uint  f1 = md.sample1;
+  vec3  a  = morph[i].samples[f0 + index].xyz;
+  vec3  b  = morph[i].samples[f1 + index].xyz;
 
   return mix(a,b,alpha) * intensity;
   }
@@ -61,196 +103,61 @@ void rotate(out vec3 rx, out vec3 ry, float a, in vec3 x, in vec3 y){
   }
 #endif
 
-vec4 processVertex(out Varyings shOut, uint objId, uint vboOffset) {
-#if   (MESH_TYPE==T_PFX)
-  vec3  pos    = pfx[objId].pos;
-  uint  color  = pfx[objId].color;
-  vec3  size   = pfx[objId].size;
-  uint  bits0  = pfx[objId].bits0;
-  vec3  dir    = pfx[objId].dir;
-  vec2  uv     = vec2(0);
-  vec3  normal = vec3(0);
-#elif   (MESH_TYPE==T_SKINING) && defined(GL_VERTEX_SHADER)
-  vec3  normal = inNormal;
-  vec2  uv     = inUV;
-  uint  color  = inColor;
-  vec3  pos0   = inPos0;
-  vec3  pos1   = inPos1;
-  vec3  pos2   = inPos2;
-  vec3  pos3   = inPos3;
-  uvec4 boneId = uvec4(objId) + uvec4(unpackUnorm4x8(inId)*255.0);
-  vec4  weight = inWeight;
-#elif (MESH_TYPE==T_SKINING) && defined(MESH)
-  uint  id     = vboOffset*23;
-  vec3  normal = vec3(vertices[id + 0], vertices[id + 1], vertices[id + 2]);
-  vec2  uv     = vec2(vertices[id + 3], vertices[id + 4]);
-  uint  color  = floatBitsToUint(vertices[id + 5]);
-  vec3  pos0   = vec3(vertices[id +  6], vertices[id +  7], vertices[id +  8]);
-  vec3  pos1   = vec3(vertices[id +  9], vertices[id + 10], vertices[id + 11]);
-  vec3  pos2   = vec3(vertices[id + 12], vertices[id + 13], vertices[id + 14]);
-  vec3  pos3   = vec3(vertices[id + 15], vertices[id + 16], vertices[id + 17]);
-  uvec4 inId   = uvec4(unpackUnorm4x8(floatBitsToUint(vertices[id + 18]))*255.0);
-  vec4  weight = vec4(vertices[id + 19], vertices[id + 20], vertices[id + 21], vertices[id + 22]);
-  uvec4 boneId = uvec4(objId) + inId;
-#elif  defined(GL_VERTEX_SHADER)
-  vec3  pos    = inPos;
-  vec3  normal = inNormal;
-  vec2  uv     = inUV;
-  uint  color  = inColor;
-#elif  defined(MESH)
-  uint  id     = vboOffset*9;
-  vec3  pos    = vec3(vertices[id + 0], vertices[id + 1], vertices[id + 2]);
-  vec3  normal = vec3(vertices[id + 3], vertices[id + 4], vertices[id + 5]);
-  vec2  uv     = vec2(vertices[id + 6], vertices[id + 7]);
-  uint  color  = floatBitsToUint(vertices[id + 8]);
+vec4 processVertex(out Varyings shOut, in Vertex v, uint bucketId, uint instanceId, uint vboOffset) {
+#if defined(LVL_OBJECT)
+  Instance obj = pullInstance(instanceId);
 #endif
 
   // Position offsets
-  vec3 dpos   = vec3(0);
 #if (MESH_TYPE==T_MORPH)
   for(int i=0; i<MAX_MORPH_LAYERS; ++i)
-    dpos += morphOffset(i,vboOffset);
-#endif
-#if defined(LVL_OBJECT)
-  dpos += normal*push.fatness;
+    v.pos += morphOffset(bucketId, obj.animPtr+i, vboOffset);
 #endif
 
   // Normals
-#if (MESH_TYPE==T_SKINING)
-  normal = (matrix[objId]*vec4(normal,  0.0)).xyz;
-  normal = vec3(normal.z,normal.y,-normal.x);
-#elif (MESH_TYPE==T_OBJ || MESH_TYPE==T_MORPH)
-  normal = (matrix[objId]*vec4(normal,  0.0)).xyz;
-#else
-  // normal = normal;
-#endif
-
-  // Bilboards
-#if (MESH_TYPE==T_PFX)
-  {
-    const float U[6]   = { 0, 1, 0,  0, 1, 1};
-    const float V[6]   = { 1, 0, 0,  1, 1, 0};
-
-    const float dxQ[6] = {-0.5, 0.5, -0.5, -0.5,  0.5,  0.5};
-    const float dyQ[6] = { 0.5,-0.5, -0.5,  0.5,  0.5, -0.5};
-
-    const float dxT[6] = {-0.3333,  1.5, -0.3333, 0,0,0};
-    const float dyT[6] = { 1.5, -0.3333, -0.3333, 0,0,0};
-
-    const bool  visZBias         = bitfieldExtract(bits0, 0, 1)!=0;
-    const bool  visTexIsQuadPoly = bitfieldExtract(bits0, 1, 1)!=0;
-    const bool  visYawAlign      = bitfieldExtract(bits0, 2, 1)!=0;
-    const bool  isTrail          = bitfieldExtract(bits0, 3, 1)!=0;
-    const uint  visOrientation   = bitfieldExtract(bits0, 4, 2);
-
-    const mat4  m      = scene.viewProject;
-    vec3        left   = scene.pfxLeft;
-    vec3        top    = scene.pfxTop;
-    vec3        depth  = scene.pfxDepth;
-
-    if(visYawAlign) {
-      left = vec3(left.x, 0, left.z);
-      top  = vec3(0, -1, 0);
-      }
-
-    uv     = vec2(U[vboOffset],V[vboOffset]);
-    normal = -depth;
-
-    if(isTrail) {
-      const uint colorB = pfx[objId].colorB;
-      normal = vec3(0,1,0);
-
-      if(dyQ[vboOffset]>0)
-        color = colorB;
-
-      float tA     = size.y;
-      float tB     = size.z;
-
-      vec3 n  = cross(depth,dir);
-      n = normalize(n);
-      n = n*size.x;
-
-      pos += (dxQ[vboOffset])*n + (dyQ[vboOffset]+0.5)*dir;
-
-      uv.x = dxQ[vboOffset]+0.5;
-      uv.y = 1.0-(tA + (dyQ[vboOffset]+0.5)*(tB-tA));
-      }
-    else if(visOrientation==PfxOrientationVelocity3d) {
-      float ldir = length(dir);
-      if(ldir!=0.f)
-        dir/=ldir;
-      top  = -dir;
-      left = -cross(top,depth);
-      }
-    else if(visOrientation==PfxOrientationVelocity) {
-      dir = (m * vec4(dir,0)).xyz;
-      float ldir = length(dir);
-      dir = (ldir>0) ? (dir/ldir) : vec3(0);
-
-      float sVel = 1.5f*(1.f - abs(dir.z));
-      float c    = -dir.x;
-      float s    =  dir.y;
-      float rot  = (s==0 && c==0) ? 0.f : atan(s,c);
-
-      vec3 l,t;
-      rotate(l,t,rot+float(M_PI/2),left,top);
-      left = l*sVel;
-      top  = t*sVel;
-      }
-    else {
-      // nope
-      }
-
-    if(visTexIsQuadPoly)
-      pos += left*dxQ[vboOffset]*size.x + top*dyQ[vboOffset]*size.y;
-    else if(!isTrail)
-      pos += left*dxT[vboOffset]*size.x + top*dyT[vboOffset]*size.y;
-
-    if(visZBias)
-      pos -= size.z*depth;
-  }
+  vec3 normal = v.normal;
+#if defined(LVL_OBJECT)
+  normal = obj.mat*vec4(normal,0);
 #endif
 
   // Position
 #if (MESH_TYPE==T_SKINING)
-  vec3 pos = vec3(0);
+  vec3 pos  = vec3(0);
+  vec3 dpos = normal*obj.fatness;
   {
-    dpos = (matrix[objId]*vec4(dpos,0)).xyz;
-    dpos = vec3(dpos.z,dpos.y,-dpos.x);
+    const uvec4 boneId = v.boneId + uvec4(obj.animPtr);
 
-    vec3 t0   = (matrix[boneId.x]*vec4(pos0,1.0)).xyz;
-    vec3 t1   = (matrix[boneId.y]*vec4(pos1,1.0)).xyz;
-    vec3 t2   = (matrix[boneId.z]*vec4(pos2,1.0)).xyz;
-    vec3 t3   = (matrix[boneId.w]*vec4(pos3,1.0)).xyz;
-    pos += (t0*weight.x + t1*weight.y + t2*weight.z + t3*weight.w) + dpos;
+    const vec3  t0 = (pullMatrix(boneId.x)*vec4(v.pos0,1.0)).xyz;
+    const vec3  t1 = (pullMatrix(boneId.y)*vec4(v.pos1,1.0)).xyz;
+    const vec3  t2 = (pullMatrix(boneId.z)*vec4(v.pos2,1.0)).xyz;
+    const vec3  t3 = (pullMatrix(boneId.w)*vec4(v.pos3,1.0)).xyz;
+
+    pos = (t0*v.weight.x + t1*v.weight.y + t2*v.weight.z + t3*v.weight.w) + dpos;
   }
 #elif (MESH_TYPE==T_OBJ || MESH_TYPE==T_MORPH)
-  pos    = (matrix[objId]*vec4(pos+dpos,1.0)).xyz;
+  vec3 dpos = normal*obj.fatness;
+  vec3 pos  = obj.mat*vec4(v.pos,1.0) + dpos;
 #else
-  //pos = pos;
+  vec3 pos  = v.pos;
 #endif
 
 #if defined(MAT_UV)
-  shOut.uv   = uv;
+  shOut.uv     = v.uv;
 #endif
 
-#if !defined(DEPTH_ONLY)
+#if defined(MAT_NORMAL)
   shOut.normal = normal;
 #endif
 
-#if defined(FORWARD) || (MESH_TYPE==T_LANDSCAPE)
+#if defined(MAT_POSITION)
   shOut.pos    = pos;
 #endif
 
 #if defined(MAT_COLOR)
-  shOut.color = unpackUnorm4x8(color);
+  shOut.color = unpackUnorm4x8(v.color);
 #endif
 
-  vec4 ret = scene.viewProject*vec4(pos,1.0);
-#ifdef MESH
-  //ret.y = -ret.y;
-#endif
-  return ret;
+  return scene.viewProject*vec4(pos,1.0);
   }
 
 #endif

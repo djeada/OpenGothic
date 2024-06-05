@@ -5,22 +5,17 @@
 #include <Tempest/DescriptorSet>
 #include <Tempest/UniformBuffer>
 
-#include <vector>
-#include <list>
-
 #include "graphics/mesh/protomesh.h"
 #include "graphics/mesh/submesh/staticmesh.h"
-#include "graphics/mesh/submesh/animmesh.h"
-#include "objectsbucket.h"
+#include "visualobjects.h"
 
-class VisualObjects;
 class Pose;
 class ProtoMesh;
 class LightSource;
 
 class MeshObjects final {
   private:
-    using Item = ObjectsBucket::Item;
+    using Item = VisualObjects::Item;
 
   public:
     MeshObjects(VisualObjects& parent);
@@ -62,7 +57,7 @@ class MeshObjects final {
         void   setPose     (const Tempest::Matrix4x4& obj, const Pose& p);
         void   setAsGhost  (bool g);
         void   setFatness  (float f);
-        void   setWind     (phoenix::animation_mode m, float intensity);
+        void   setWind     (zenkit::AnimationType m, float intensity);
         void   startMMAnim (std::string_view anim, float intensity, uint64_t timeUntil);
 
         bool   isEmpty()    const { return subCount==0; }
@@ -80,7 +75,7 @@ class MeshObjects final {
         std::unique_ptr<Item[]> sub;
         size_t                  subCount=0;
 
-        std::unique_ptr<MatrixStorage::Id> anim;
+        std::unique_ptr<InstanceStorage::Id> anim;
 
         const ProtoMesh*        proto   =nullptr;
         const Skeleton*         skeleton=nullptr;

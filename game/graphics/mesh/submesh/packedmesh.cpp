@@ -4,7 +4,6 @@
 #include <Tempest/Log>
 #include <fstream>
 #include <algorithm>
-#include <unordered_set>
 
 #include "game/compatibility/phoenix.h"
 #include "gothic.h"
@@ -14,6 +13,34 @@ using namespace Tempest;
 static uint64_t mkUInt64(uint32_t a, uint32_t b) {
   return (uint64_t(a)<<32) | uint64_t(b);
   };
+
+static bool isVisuallySame(const zenkit::Material& a, const zenkit::Material& b) {
+  return
+          // a.name                         == b.name && // mat name
+    a.group                        == b.group &&
+    a.color                        == b.color &&
+    a.smooth_angle                 == b.smooth_angle &&
+    a.texture                      == b.texture &&
+    a.texture_scale                == b.texture_scale &&
+    a.texture_anim_fps             == b.texture_anim_fps &&
+    a.texture_anim_map_mode        == b.texture_anim_map_mode &&
+    a.texture_anim_map_dir         == b.texture_anim_map_dir &&
+    // a.disable_collision            == b.disable_collision &&
+    // a.disable_lightmap             == b.disable_lightmap &&
+    // a.dont_collapse                == b.dont_collapse &&
+    a.detail_object                == b.detail_object &&
+    a.detail_object_scale          == b.detail_object_scale &&
+    a.force_occluder               == b.force_occluder &&
+    a.environment_mapping          == b.environment_mapping &&
+    a.environment_mapping_strength == b.environment_mapping_strength &&
+    a.wave_mode                    == b.wave_mode &&
+    a.wave_speed                   == b.wave_speed &&
+    a.wave_max_amplitude           == b.wave_max_amplitude &&
+    a.wave_grid_size               == b.wave_grid_size &&
+    a.ignore_sun                   == b.ignore_sun &&
+    // a.alpha_func                   == b.alpha_func &&
+    a.default_mapping              == b.default_mapping;
+  }
 
 struct PackedMesh::PrimitiveHeap {
   using value_type = std::pair<uint64_t,uint32_t>;
@@ -46,7 +73,7 @@ struct PackedMesh::PrimitiveHeap {
     auto l = std::lower_bound(data.begin(), data.end(), v, [](const value_type& x, uint64_t v){
       return x.first<v;
       });
-    auto r = l++;
+    auto r = l; ++r;
     while(r!=data.end()) {
       if(r->first>v)
         break;
@@ -59,10 +86,14 @@ struct PackedMesh::PrimitiveHeap {
 void PackedMesh::Meshlet::flush(std::vector<Vertex>& vertices,
                                 std::vector<uint32_t>& indices,
                                 std::vector<uint8_t>& indices8,
-                                std::vector<Bounds>& instances,
-                                const phoenix::mesh& mesh) {
+                                std::vector<Cluster>& instances,
+                                const zenkit::Mesh& mesh) {
   if(indSz==0)
     return;
+
+  if(!validate())
+    return;
+
   instances.push_back(bounds);
 
   auto& vbo = mesh.vertices;  // xyz
@@ -82,7 +113,7 @@ void PackedMesh::Meshlet::flush(std::vector<Vertex>& vertices,
     vx.norm[2] = v.normal.z;
     vx.uv[0]   = v.texture.x;
     vx.uv[1]   = v.texture.y;
-    vx.color   = v.light;
+    vx.color   = 0xFFFFFFFF;
     vertices[vboSz+i] = vx;
     }
   for(size_t i=vertSz; i<MaxVert; ++i) {
@@ -91,7 +122,7 @@ void PackedMesh::Meshlet::flush(std::vector<Vertex>& vertices,
     }
 
   size_t iboSz  = indices.size();
-  indices .resize(iboSz  + MaxInd );
+  indices.resize(iboSz + MaxInd);
   for(size_t i=0; i<indSz; ++i) {
     indices[iboSz+i] = uint32_t(vboSz)+indexes[i];
     }
@@ -100,7 +131,7 @@ void PackedMesh::Meshlet::flush(std::vector<Vertex>& vertices,
     indices[iboSz+i] = uint32_t(vboSz+indSz/3);
     }
 
-  if(Gothic::inst().doMeshShading()) {
+  if(Gothic::options().doMeshShading || true) {
     size_t iboSz8 = indices8.size();
     indices8.resize(iboSz8 + MaxPrim*4);
     for(size_t i=0; i<indSz; i+=3) {
@@ -124,7 +155,7 @@ void PackedMesh::Meshlet::flush(std::vector<Vertex>& vertices, std::vector<Verte
                                 std::vector<uint32_t>& indices, std::vector<uint8_t>& indices8,
                                 std::vector<uint32_t>* verticesId,
                                 const std::vector<glm::vec3>& vboList,
-                                const std::vector<phoenix::wedge>& wedgeList,
+                                const std::vector<zenkit::MeshWedge>& wedgeList,
                                 const std::vector<SkeletalData>* skeletal) {
   if(indSz==0)
     return;
@@ -143,7 +174,7 @@ void PackedMesh::Meshlet::flush(std::vector<Vertex>& vertices, std::vector<Verte
     verticesA.resize(vboSz+MaxVert);
     }
 
-  indices .resize(iboSz  + MaxInd);
+  indices.resize(iboSz + MaxInd);
 
   if(verticesId!=nullptr)
     verticesId->resize(vboSz+MaxVert);
@@ -205,7 +236,7 @@ void PackedMesh::Meshlet::flush(std::vector<Vertex>& vertices, std::vector<Verte
     indices[iboSz+i] = uint32_t(vboSz+indSz/3);
     }
 
-  if(Gothic::inst().doMeshShading()) {
+  if(Gothic::options().doMeshShading || true) {
     size_t iboSz8 = indices8.size();
     indices8.resize(iboSz8 + MaxPrim*4);
     for(size_t i=0; i<indSz; i+=3) {
@@ -223,6 +254,20 @@ void PackedMesh::Meshlet::flush(std::vector<Vertex>& vertices, std::vector<Verte
       indices8[at+3] = vertSz;
       }
     }
+  }
+
+bool PackedMesh::Meshlet::validate() const {
+  return true;
+  /*
+  // debug code
+  for(int i=0; i<indSz; ++i) {
+    for(int r=i+1; r<indSz; ++r) {
+      if(indexes[i]==indexes[r])
+        return true;
+      }
+    }
+  return false;
+  */
   }
 
 bool PackedMesh::Meshlet::insert(const Vert& a, const Vert& b, const Vert& c) {
@@ -256,6 +301,15 @@ bool PackedMesh::Meshlet::insert(const Vert& a, const Vert& b, const Vert& c) {
   if(vSz>MaxVert)
     return false;
 
+  if(vSz==vertSz) {
+    for(size_t i=0; i<indSz; i+=3) {
+      if(indexes[i+0]==ea && indexes[i+1]==eb && indexes[i+2]==ec) {
+        // duplicant?
+        return true;
+        }
+      }
+    }
+
   indexes[indSz+0] = ea;
   indexes[indSz+1] = eb;
   indexes[indSz+2] = ec;
@@ -274,11 +328,11 @@ void PackedMesh::Meshlet::clear() {
   indSz  = 0;
   }
 
-void PackedMesh::Meshlet::updateBounds(const phoenix::mesh& mesh) {
+void PackedMesh::Meshlet::updateBounds(const zenkit::Mesh& mesh) {
   updateBounds(mesh.vertices);
   }
 
-void PackedMesh::Meshlet::updateBounds(const phoenix::proto_mesh& mesh) {
+void PackedMesh::Meshlet::updateBounds(const zenkit::MultiResolutionMesh& mesh) {
   updateBounds(mesh.positions);
   }
 
@@ -336,7 +390,7 @@ void PackedMesh::Meshlet::merge(const Meshlet& other) {
   vertSz = uint8_t(vertSz+other.vertSz);
   }
 
-PackedMesh::PackedMesh(const phoenix::mesh& mesh, PkgType type) {
+PackedMesh::PackedMesh(const zenkit::Mesh& mesh, PkgType type) {
   if(type==PK_VisualLnd || type==PK_Visual) {
     packMeshletsLnd(mesh);
     computeBbox();
@@ -349,7 +403,7 @@ PackedMesh::PackedMesh(const phoenix::mesh& mesh, PkgType type) {
     }
   }
 
-PackedMesh::PackedMesh(const phoenix::proto_mesh& mesh, PkgType type) {
+PackedMesh::PackedMesh(const zenkit::MultiResolutionMesh& mesh, PkgType type) {
   subMeshes.resize(mesh.sub_meshes.size());
   isUsingAlphaTest = mesh.alpha_test;
   {
@@ -361,7 +415,7 @@ PackedMesh::PackedMesh(const phoenix::proto_mesh& mesh, PkgType type) {
   packMeshletsObj(mesh,type,nullptr);
   }
 
-PackedMesh::PackedMesh(const phoenix::softskin_mesh& skinned) {
+PackedMesh::PackedMesh(const zenkit::SoftSkinMesh& skinned) {
   auto& mesh = skinned.mesh;
   subMeshes.resize(mesh.sub_meshes.size());
   {
@@ -386,7 +440,7 @@ PackedMesh::PackedMesh(const phoenix::softskin_mesh& skinned) {
   packMeshletsObj(mesh,PK_Visual,&vertices);
   }
 
-void PackedMesh::packPhysics(const phoenix::mesh& mesh, PkgType type) {
+void PackedMesh::packPhysics(const zenkit::Mesh& mesh, PkgType type) {
   auto& vbo = mesh.vertices;
   auto& ibo = mesh.polygons.vertex_indices;
   vertices.reserve(vbo.size());
@@ -401,13 +455,13 @@ void PackedMesh::packPhysics(const phoenix::mesh& mesh, PkgType type) {
     if(m.disable_collision)
       continue;
     Prim p;
-    p.primId = i*3;
+    p.primId = uint32_t(i*3);
     if(m.name.find(':')==std::string::npos) {
       // unnamed materials - can merge them
       p.mat   = uint8_t(m.group);
       } else {
       // offset named materials
-      p.mat   = uint32_t(phoenix::material_group::none) + mid[i];
+      p.mat   = uint32_t(zenkit::MaterialGroup::NONE) + mid[i];
       }
     prim.push_back(p);
     }
@@ -426,11 +480,11 @@ void PackedMesh::packPhysics(const phoenix::mesh& mesh, PkgType type) {
     SubMesh sub;
     sub.iboOffset = indices.size();
 
-    if(mId < size_t(phoenix::material_group::none)) {
+    if(mId < size_t(zenkit::MaterialGroup::NONE)) {
       sub.material.name  = "";
-      sub.material.group = phoenix::material_group(mId);
+      sub.material.group = zenkit::MaterialGroup(mId);
       } else {
-      auto& m = mat[mId-size_t(phoenix::material_group::none)];
+      auto& m = mat[mId-size_t(zenkit::MaterialGroup::NONE)];
       sub.material.name  = m.name;
       sub.material.group = m.group;
       }
@@ -462,17 +516,32 @@ void PackedMesh::packPhysics(const phoenix::mesh& mesh, PkgType type) {
     }
   }
 
-void PackedMesh::packMeshletsLnd(const phoenix::mesh& mesh) {
+void PackedMesh::packMeshletsLnd(const zenkit::Mesh& mesh) {
   auto& ibo  = mesh.polygons.vertex_indices;
   auto& feat = mesh.polygons.feature_indices;
   auto& mid  = mesh.polygons.material_indices;
+
+  std::vector<uint32_t> mat(mesh.materials.size());
+  for(size_t i=0; i<mesh.materials.size(); ++i)
+    mat[i] = uint32_t(i);
+
+  for(size_t i=0; i<mesh.materials.size(); ++i) {
+    for(size_t r=i+1; r<mesh.materials.size(); ++r) {
+      if(mat[i]==mat[r])
+        continue;
+      auto& a = mesh.materials[i];
+      auto& b = mesh.materials[r];
+      if(isVisuallySame(a,b))
+        mat[r] = mat[i];
+      }
+    }
 
   std::vector<Prim> prim;
   prim.reserve(mid.size());
   for(size_t i=0; i<mid.size(); ++i) {
     Prim p;
-    p.primId = i*3;
-    p.mat    = mid[i];
+    p.primId = uint32_t(i*3);
+    p.mat    = mat[mid[i]];
     prim.push_back(p);
     }
   std::sort(prim.begin(), prim.end(), [](const Prim& a, const Prim& b){
@@ -483,12 +552,16 @@ void PackedMesh::packMeshletsLnd(const phoenix::mesh& mesh) {
   heap.reserve(mid.size());
   std::vector<bool> used(mid.size(),false);
 
+  vertices.reserve(mesh.vertices.size());
+  indices .reserve(ibo.size());
+  indices8.reserve(ibo.size());
+  meshletBounds.reserve(prim.size()/MaxPrim);
   for(size_t i=0; i<prim.size();) {
     const auto mId = prim[i].mat;
 
     heap.clear();
     for(; i<prim.size() && prim[i].mat==mId; ++i) {
-      const size_t id = prim[i].primId;
+      const uint32_t id = prim[i].primId;
 
       auto a = mkUInt64(ibo[id+0],feat[id+0]);
       auto b = mkUInt64(ibo[id+1],feat[id+1]);
@@ -519,7 +592,7 @@ void PackedMesh::packMeshletsLnd(const phoenix::mesh& mesh) {
     }
   }
 
-void PackedMesh::packMeshletsObj(const phoenix::proto_mesh& mesh, PkgType type,
+void PackedMesh::packMeshletsObj(const zenkit::MultiResolutionMesh& mesh, PkgType type,
                                  const std::vector<SkeletalData>* skeletal) {
   auto* vId = (type==PK_VisualMorph) ? &verticesId : nullptr;
 
@@ -541,7 +614,7 @@ void PackedMesh::packMeshletsObj(const phoenix::proto_mesh& mesh, PkgType type,
       for(int x=0; x<3; ++x) {
         auto& wedge = sm.wedges[ibo[x]];
         auto vert = mkUInt64(wedge.index,ibo[x]);
-        heap.push_back(std::make_pair(vert,i*3));
+        heap.push_back(std::make_pair(vert,uint32_t(i*3)));
         }
       }
 
@@ -558,8 +631,8 @@ void PackedMesh::packMeshletsObj(const phoenix::proto_mesh& mesh, PkgType type,
     }
   }
 
-std::vector<PackedMesh::Meshlet> PackedMesh::buildMeshlets(const phoenix::mesh* mesh,
-                                                           const phoenix::sub_mesh* proto_mesh,
+std::vector<PackedMesh::Meshlet> PackedMesh::buildMeshlets(const zenkit::Mesh* mesh,
+                                                           const zenkit::SubMesh* proto_mesh,
                                                            PrimitiveHeap& heap, std::vector<bool>& used) {
   heap.sort();
   std::fill(used.begin(), used.end(), false);
@@ -578,17 +651,21 @@ std::vector<PackedMesh::Meshlet> PackedMesh::buildMeshlets(const phoenix::mesh* 
       auto i = active.vert[r];
       auto e = heap.equal_range(mkUInt64(i.first,i.second));
       for(auto it = e.first; it!=e.second; ++it) {
-        if(used[it->second/3])
+        auto id = it->second/3;
+        if(used[id])
           continue;
-        triId = it->second/3;
-        if(!addTriangle(active,mesh,proto_mesh,triId))
-          break;
-        used[triId] = true;
+        if(addTriangle(active,mesh,proto_mesh,id)) {
+          used[id] = true;
+          continue;
+          }
+        triId = id;
+        break;
         }
       firstVert = r+1;
       }
 
     if(triId==size_t(-1) && active.indSz!=0 && !tightPacking) {
+      // active.validate();
       meshlets.push_back(std::move(active));
       active.clear();
       firstVert = 0;
@@ -612,20 +689,21 @@ std::vector<PackedMesh::Meshlet> PackedMesh::buildMeshlets(const phoenix::mesh* 
       continue;
       }
 
-    if(active.indSz!=0)
+    if(active.indSz!=0) {
+      // active.validate();
       meshlets.push_back(std::move(active));
+      active.clear();
+      firstVert = 0;
+      }
 
     if(triId==size_t(-1))
       break;
-
-    active.clear();
-    firstVert = 0;
     }
 
   return meshlets;
   }
 
-bool PackedMesh::addTriangle(Meshlet& dest, const phoenix::mesh* mesh, const phoenix::sub_mesh* sm, size_t id) {
+bool PackedMesh::addTriangle(Meshlet& dest, const zenkit::Mesh* mesh, const zenkit::SubMesh* sm, size_t id) {
   if(mesh!=nullptr) {
     size_t id3  = id*3;
     auto&  ibo  = mesh->polygons.vertex_indices;
@@ -711,7 +789,7 @@ void PackedMesh::dbgUtilization(const std::vector<Meshlet>& meshlets) {
     Log::d("");
   }
 
-void PackedMesh::dbgMeshlets(const phoenix::mesh& mesh, const std::vector<Meshlet*>& meshlets) {
+void PackedMesh::dbgMeshlets(const zenkit::Mesh& mesh, const std::vector<Meshlet*>& meshlets) {
   std::ofstream out("dbg.obj");
 
   size_t off = 1;

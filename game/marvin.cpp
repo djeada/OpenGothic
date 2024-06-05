@@ -1,12 +1,13 @@
 #include "marvin.h"
 
 #include <charconv>
-#include <initializer_list>
 #include <cstdint>
 #include <cctype>
 
 #include "utils/string_frm.h"
 #include "world/objects/npc.h"
+#include "world/objects/item.h"
+#include "world/triggers/abstracttrigger.h"
 #include "camera.h"
 #include "gothic.h"
 
@@ -118,6 +119,8 @@ Marvin::Marvin() {
     {"aigoto %s",                  C_AiGoTo},
     {"goto waypoint %s",           C_GoToWayPoint},
     {"goto pos %f %f %f",          C_GoToPos},
+    {"goto vob %c %d",             C_GoToVob},
+    {"goto camera",                C_GoToCamera},
 
 
     {"camera autoswitch",          C_CamAutoswitch},
@@ -125,7 +128,10 @@ Marvin::Marvin() {
     {"toggle camdebug",            C_ToggleCamDebug},
     {"toggle camera",              C_ToggleCamera},
     {"toggle inertiatarget",       C_ToggleInertia},
+    {"ztoggle timedemo",           C_ZToggleTimeDemo},
     {"insert %c",                  C_Insert},
+
+    {"toggle gi",                  C_ToggleGI},
     };
   }
 
@@ -302,6 +308,31 @@ bool Marvin::exec(std::string_view v) {
       Gothic::inst().camera()->reset(player);
       return true;
       }
+    case C_GoToVob: {
+      World* world  = Gothic::inst().world();
+      Npc*   player = Gothic::inst().player();
+      auto   c      = Gothic::inst().camera();
+      if(world==nullptr || c==nullptr || player==nullptr)
+        return false;
+      size_t n = 1;
+      if(!ret.argv[1].empty()) {
+        auto err = std::from_chars(ret.argv[1].data(),ret.argv[1].data()+ret.argv[1].size(),n).ec;
+        if(err!=std::errc())
+          return false;
+        }
+      return goToVob(*world,*player,*c,ret.argv[0],--n);
+      }
+    case C_GoToCamera: {
+      auto c      = Gothic::inst().camera();
+      Npc* player = Gothic::inst().player();
+      if(c==nullptr || player==nullptr)
+        return false;
+      auto pos = c->destPosition();
+      player->setPosition(pos.x,pos.y,pos.z);
+      player->updateTransform();
+      c->reset();
+      return true;
+      }
     case C_ToggleFrame:{
       Gothic::inst().setFRate(!Gothic::inst().doFrate());
       return true;
@@ -328,6 +359,14 @@ bool Marvin::exec(std::string_view v) {
         c->setInertiaTargetEnable(!c->isInertiaTargetEnabled());
       return true;
       }
+    case C_ZToggleTimeDemo: {
+      World* world = Gothic::inst().world();
+      if(world==nullptr)
+        return false;
+      const TriggerEvent evt("TIMEDEMO","",world->tickCount(),TriggerEvent::T_Trigger);
+      world->triggerEvent(evt);
+      return true;
+      }
     case C_ToggleDesktop: {
       Gothic::inst().toggleDesktop();
       return true;
@@ -352,6 +391,10 @@ bool Marvin::exec(std::string_view v) {
         return false;
       return printVariable(world, ret.argv[0]);
       }
+
+    case C_ToggleGI:
+      Gothic::inst().toggleGi();
+      return true;
     }
 
   return true;
@@ -367,7 +410,7 @@ bool Marvin::addItemOrNpcBySymbolName(World* world, std::string_view name, const
   if(sym==nullptr||sym->parent()==uint32_t(-1))
     return false;
 
-  if(sym->type()!=phoenix::datatype::instance)
+  if(sym->type()!=zenkit::DaedalusDataType::INSTANCE)
     return false;
 
   const auto* cls = sym;
@@ -392,16 +435,16 @@ bool Marvin::printVariable(World* world, std::string_view name) {
   if(sym==nullptr)
     return false;
   switch(sym->type()) {
-    case phoenix::datatype::integer:
+    case zenkit::DaedalusDataType::INT:
       buf = string_frm(name," = ",sym->get_int(0));
       break;
-    case phoenix::datatype::float_:
+    case zenkit::DaedalusDataType::FLOAT:
       buf = string_frm(name," = ",sym->get_float(0));
       break;
-    case phoenix::datatype::string:
+    case zenkit::DaedalusDataType::STRING:
       buf = string_frm(name," = ",sym->get_string(0));
       break;
-    case phoenix::datatype::instance:
+    case zenkit::DaedalusDataType::INSTANCE:
       buf = string_frm(name," = ",sym->get_instance().get());
       break;
     default:
@@ -419,13 +462,36 @@ bool Marvin::setTime(World& world, std::string_view hh, std::string_view mm) {
     return false;
 
   err = std::from_chars(mm.data(), mm.data()+mm.size(), mv, 10).ec;
-  if(err!=std::errc())
-    return false;
+  if(err!=std::errc()) {
+    mv = 0;
+    }
 
   if(hv<0 || hv>=24 || mv<0 || mv>=60)
     return false;
 
   world.setDayTime(hv,mv);
+  return true;
+  }
+
+bool Marvin::goToVob(World& world, Npc& player, Camera& c, std::string_view name, size_t n) {
+  auto&  sc = world.script();
+  size_t id = sc.findSymbolIndex(name);
+  if(id==size_t(-1))
+    return false;
+
+  Tempest::Vec3 pos;
+  if(auto npc = world.findNpcByInstance(id,n))
+     pos = npc->position();
+  else if(auto it = world.findItemByInstance(id,n))
+     pos = it->position();
+  else
+    return false;
+
+  if(!player.setInteraction(nullptr))
+    return false;
+  player.setPosition(pos);
+  player.updateTransform();
+  c.reset();
   return true;
   }
 

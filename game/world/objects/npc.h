@@ -16,9 +16,8 @@
 
 #include <cstdint>
 #include <string>
-#include <deque>
 
-#include <phoenix/ext/daedalus_classes.hh>
+#include <zenkit/addon/daedalus.hh>
 
 class Interactive;
 class WayPoint;
@@ -124,7 +123,8 @@ class Npc final {
     auto       portalName() -> std::string_view;
     auto       formerPortalName() -> std::string_view;
 
-    float      qDistTo(float x,float y,float z) const;
+    float      qDistTo(float x, float y, float z) const;
+    float      qDistTo(const Tempest::Vec3 pos) const;
     float      qDistTo(const WayPoint* p) const;
     float      qDistTo(const Npc& p) const;
     float      qDistTo(const Interactive& p) const;
@@ -181,6 +181,7 @@ class Npc final {
     bool       isJumpAnim() const;
     bool       isFlyAnim() const;
     bool       isFalling() const;
+    bool       isFallingDeep() const;
     bool       isSlide() const;
     bool       isInAir() const;
     bool       isStanding() const;
@@ -191,6 +192,9 @@ class Npc final {
 
     void       setTalentSkill(Talent t,int32_t lvl);
     int32_t    talentSkill(Talent t) const;
+
+    void       invalidateTalentOverlays(Talent t);
+    void       invalidateTalentOverlays();
 
     void       setTalentValue(Talent t,int32_t lvl);
     int32_t    talentValue(Talent t) const;
@@ -268,6 +272,7 @@ class Npc final {
 
     bool      isEnemy(const Npc& other) const;
     bool      isDead() const;
+    bool      isLie() const;
     bool      isUnconscious() const;
     bool      isDown() const;
     bool      isAttack() const;
@@ -319,8 +324,8 @@ class Npc final {
 
     auto      dialogChoices(Npc &player, const std::vector<uint32_t> &except, bool includeImp) -> std::vector<GameScript::DlgChoice>;
 
-    phoenix::c_npc&                        handle() { return *hnpc; }
-    const std::shared_ptr<phoenix::c_npc>& handlePtr() const { return hnpc; }
+    zenkit::INpc&                        handle() { return *hnpc; }
+    const std::shared_ptr<zenkit::INpc>& handlePtr() const { return hnpc; }
 
     auto      inventory() const -> const Inventory& { return invent; }
     size_t    itemCount  (size_t id) const;
@@ -349,7 +354,7 @@ class Npc final {
     auto      mapHeadBone() const -> Tempest::Vec3;
     auto      mapBone(std::string_view bone) const -> Tempest::Vec3;
 
-    bool      turnTo  (float dx, float dz, bool anim, uint64_t dt);
+    bool      turnTo  (float dx, float dz, bool noAnim, uint64_t dt);
     bool      rotateTo(float dx, float dz, float speed, bool anim, uint64_t dt);
     bool      isRotationAllowed() const;
     auto      playAnimByName(std::string_view name, BodyState bs) -> const Animation::Sequence*;
@@ -368,13 +373,14 @@ class Npc final {
     void      clearGoTo();
     void      stopWalking();
 
-    bool      canSeeNpc(const Npc& oth,bool freeLos) const;
+    bool      canSeeNpc(const Npc& oth, bool freeLos) const;
+    bool      canSeeNpc(const Tempest::Vec3 pos, bool freeLos) const;
+    bool      canSeeItem(const Item& it, bool freeLos) const;
     bool      canSeeSource() const;
-    bool      canSeeNpc(float x,float y,float z,bool freeLos) const;
-    auto      canSenseNpc(const Npc& oth,bool freeLos, float extRange=0.f) const -> SensesBit;
-    auto      canSenseNpc(float x,float y,float z,bool freeLos,bool isNoisy,float extRange=0.f) const -> SensesBit;
+    bool      canRayHitPoint(const Tempest::Vec3 pos, bool freeLos = true, float extRange=0.f) const;
 
-    bool      canSeeItem(const Item& it,bool freeLos) const;
+    auto      canSenseNpc(const Npc& oth, bool freeLos, float extRange=0.f) const -> SensesBit;
+    auto      canSenseNpc(const Tempest::Vec3 pos, bool freeLos, bool isNoisy, float extRange=0.f) const -> SensesBit;
 
     void      setTarget(Npc* t);
     Npc*      target() const;
@@ -491,6 +497,8 @@ class Npc final {
     bool      hasAutoroll() const;
     void      stopWalkAnimation();
     void      takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32_t splId, bool isSpell);
+    void      takeFallDamage(const Tempest::Vec3& fallSpeed);
+    void      takeDrownDamage();
 
     void      dropTorch(bool burnout = false);
 
@@ -509,7 +517,7 @@ class Npc final {
 
     World&                         owner;
     // main props
-    std::shared_ptr<phoenix::c_npc> hnpc={};
+    std::shared_ptr<zenkit::INpc>  hnpc={};
     float                          x=0.f;
     float                          y=0.f;
     float                          z=0.f;

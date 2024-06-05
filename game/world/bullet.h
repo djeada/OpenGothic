@@ -61,7 +61,7 @@ class Bullet final : public DynamicWorld::BulletCallback {
   protected:
     void     onStop() override;
     void     onMove() override;
-    void     onCollide(phoenix::material_group matId) override;
+    void     onCollide(zenkit::MaterialGroup matId) override;
     void     onCollide(Npc& other) override;
 
   private:
@@ -69,9 +69,9 @@ class Bullet final : public DynamicWorld::BulletCallback {
     World*                    wrld=nullptr;
     Npc*                      ow=nullptr;
 
-    DamageCalculator::Damage  dmg    = {};
-    float                     hitCh  = 1.f;
-    float                     critCh = 0.f;
+    DamageCalculator::Damage  dmg        = {};
+    float                     hitCh      = 1.f;
+    float                     critCh     = 0.f;
 
     MeshObjects::Mesh         view;
     Effect                    vfx;

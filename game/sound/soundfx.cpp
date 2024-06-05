@@ -9,7 +9,7 @@
 #include "resources.h"
 #include "utils/string_frm.h"
 
-SoundFx::SoundVar::SoundVar(const phoenix::c_sfx &sfx, Tempest::Sound &&snd)
+SoundFx::SoundVar::SoundVar(const zenkit::ISoundEffect& sfx, Tempest::Sound &&snd)
   :snd(std::move(snd)),vol(float(sfx.vol)/127.f),loop(sfx.loop){
   }
 
@@ -46,7 +46,7 @@ SoundFx::SoundFx(Tempest::Sound &&snd) {
     inst.emplace_back(127.f,std::move(snd));
   }
 
-Tempest::SoundEffect SoundFx::getEffect(Tempest::SoundDevice &dev, bool& loop) const {
+Tempest::SoundEffect SoundFx::load(Tempest::SoundDevice &dev, bool& loop) const {
   if(inst.size()==0)
     return Tempest::SoundEffect();
   auto&                var    = inst[size_t(std::rand())%inst.size()];

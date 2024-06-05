@@ -9,7 +9,7 @@ using namespace Tempest;
 WayPoint::WayPoint() {
   }
 
-WayPoint::WayPoint(const phoenix::way_point &dat)
+WayPoint::WayPoint(const zenkit::WayPoint &dat)
   : x(dat.position.x),y(dat.position.y),z(dat.position.z),
     dirX(dat.direction.x),dirY(dat.direction.y),dirZ(dat.direction.z),
     underWater(dat.under_water),
@@ -35,7 +35,7 @@ bool WayPoint::checkName(std::string_view n) const {
     return true;
 
   for(size_t i=0, i0=0; ; ++i) {
-    if(src[i]=='_' || i==name.size()) {
+    if(i==name.size() || src[i]=='_') {
       const size_t len2 = i-i0;
       auto sb = src.substr(i0, len2);
       // if(sb==n)

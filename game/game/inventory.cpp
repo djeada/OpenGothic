@@ -636,6 +636,8 @@ void Inventory::switchActiveWeapon(Npc& owner,uint8_t slot) {
     next=&range;
   if(3<=slot && slot<=10)
     next=&numslot[slot-3];
+  if(next==active)
+    return;
   if(next!=nullptr && *next!=nullptr)
     active=next;
 
@@ -972,7 +974,7 @@ Item *Inventory::bestRangeWeapon(Npc &owner) {
 void Inventory::applyWeaponStats(Npc& owner, const Item &weapon, int sgn) {
   auto& hnpc = owner.handle();
   //hnpc.damagetype = sgn>0 ? weapon.handle()->damageType : (1 << GEngineClasses::DAM_INDEX_BLUNT);
-  for(size_t i=0; i<phoenix::damage_type::count; ++i){
+  for(size_t i=0; i<zenkit::DamageType::NUM; ++i){
     hnpc.damage[i] += sgn*weapon.handle().damage[i];
     if(weapon.handle().damage_type & (1<<i)) {
       hnpc.damage[i] += sgn*weapon.handle().damage_total;

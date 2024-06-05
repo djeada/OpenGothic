@@ -94,6 +94,10 @@ void WorldObjects::load(Serialize &fin) {
   for(auto& i:rootVobs)
     i->loadVobTree(fin);
 
+  for(auto& i:triggers)
+    if(i->hasDelayedEvents())
+      triggersDef.push_back(i);
+
   fin.setEntry("worlds/",fin.worldName(),"/triggerEvents");
   fin.read(sz);
   triggerEvents.resize(sz);
@@ -161,7 +165,8 @@ void WorldObjects::tick(uint64_t dt, uint64_t dtPlayer) {
       });
     }
 
-  const bool freeCam = (Gothic::inst().camera()!=nullptr && Gothic::inst().camera()->isFree());
+  auto       camera  = Gothic::inst().camera();
+  const bool freeCam = (camera!=nullptr && camera->isFree());
   const auto pl      = owner.player();
   for(size_t i=0; i<npcArr.size(); ++i) {
     auto& npc = *npcArr[i];
@@ -204,7 +209,7 @@ void WorldObjects::tick(uint64_t dt, uint64_t dtPlayer) {
     return;
 
   npcNear.clear();
-  const int   PERC_DIST_INTERMEDIAT = 1000;
+  //const int   PERC_DIST_INTERMEDIAT = 1000;
   const float nearDist              = 3000*3000;
   const float farDist               = 6000*6000;
 
@@ -238,38 +243,8 @@ void WorldObjects::tick(uint64_t dt, uint64_t dtPlayer) {
       }
 
     if(i.processPolicy()==Npc::AiNormal) {
-      for(auto& r:passive) {
-        if(r.self==&i)
-          continue;
-
-        const float l     = i.qDistTo(r.pos.x,r.pos.y,r.pos.z);
-        const float range = float(std::min(i.handle().senses_range,PERC_DIST_INTERMEDIAT));
-        if(l>range*range)
-          continue;
-
-        if(i.isDown() || i.isPlayer() || !i.isAiQueueEmpty())
-          continue;
-
-        if((percNextTime>owner.tickCount()) &&
-           (r.what==PERC_ASSESSFIGHTSOUND || r.what==PERC_ASSESSQUIETSOUND)) {
-          //Log::d("");
-          //continue;
-          }
-
-        if(r.other==nullptr)
-          continue;
-
-        if(i.canSenseNpc(*r.other, true)==SensesBit::SENSE_NONE)
-          continue;
-
-        // approximation of behavior of original G2
-        if(r.victum!=nullptr && i.canSenseNpc(*r.victum,true,float(r.other->handle().senses_range))==SensesBit::SENSE_NONE)
-          continue;
-
-        if(r.item!=size_t(-1) && r.other!=nullptr)
-          owner.script().setInstanceItem(*r.other,r.item);
-        i.perceptionProcess(*r.other,r.victum,l,PercType(r.what));
-        }
+      for(auto& r:passive)
+        passivePerceptionProcess(r, *ptr, *pl);
       }
     }
   }
@@ -394,7 +369,13 @@ void WorldObjects::tickNear(uint64_t /*dt*/) {
     }
   }
 
+void WorldObjects::triggerEvent(const TriggerEvent &e) {
+  triggerEvents.push_back(e);
+  }
+
 void WorldObjects::tickTriggers(uint64_t /*dt*/) {
+  execDelayedEvents();
+
   auto evt = std::move(triggerEvents);
   triggerEvents.clear();
 
@@ -402,18 +383,29 @@ void WorldObjects::tickTriggers(uint64_t /*dt*/) {
     owner.execTriggerEvent(e);
   }
 
-void WorldObjects::triggerEvent(const TriggerEvent &e) {
-  triggerEvents.push_back(e);
+void WorldObjects::execDelayedEvents() {
+  auto def = std::move(triggersDef);
+  triggersDef.clear();
+  for(auto i:def) {
+    i->processDelayedEvents();
+    if(i->hasDelayedEvents())
+      triggersDef.push_back(i);
+    }
   }
 
 bool WorldObjects::execTriggerEvent(const TriggerEvent& e) {
   bool emitted=false;
+
   for(auto& i:triggers) {
     auto& t = *i;
-    if(t.name()==e.target) { // NOTE: trigger name is not unique - more then one trigger can be activated
-      t.processEvent(e);
-      emitted=true;
-      }
+    if(t.name()!=e.target)
+      continue; // NOTE: trigger name is not unique - more then one trigger can be activated
+
+    const bool hadDelayedEvt = t.hasDelayedEvents();
+    t.processEvent(e);
+    if(!hadDelayedEvt && t.hasDelayedEvents())
+      triggersDef.push_back(&t);
+    emitted = true;
     }
 
   return emitted;
@@ -422,6 +414,8 @@ bool WorldObjects::execTriggerEvent(const TriggerEvent& e) {
 void WorldObjects::updateAnimation(uint64_t dt) {
   static bool doAnim=true;
   if(!doAnim)
+    return;
+  if(dt==0)
     return;
   Workers::parallelTasks(npcArr,[dt](std::unique_ptr<Npc>& i){
     i->updateAnimation(dt);
@@ -458,10 +452,25 @@ Npc *WorldObjects::findHero() {
   return nullptr;
   }
 
-Npc *WorldObjects::findNpcByInstance(size_t instance) {
-  for(auto& i:npcArr)
-    if(i->handle().symbol_index()==instance)
-      return i.get();
+Npc *WorldObjects::findNpcByInstance(size_t instance, size_t n) {
+  for(auto& i:npcArr) {
+    if(i->handle().symbol_index()==instance) {
+      if(n==0)
+        return i.get();
+      --n;
+      }
+    }
+  return nullptr;
+  }
+
+Item* WorldObjects::findItemByInstance(size_t instance, size_t n) {
+  for(auto& i:itemArr) {
+    if(i->handle().symbol_index()==instance) {
+      if(n==0)
+        return i.get();
+      --n;
+      }
+    }
   return nullptr;
   }
 
@@ -491,8 +500,6 @@ void WorldObjects::detectItem(const float x, const float y, const float z,
   }
 
 void WorldObjects::addTrigger(AbstractTrigger* tg) {
-  if(tg->hasVolume())
-    triggersZn.emplace_back(tg);
   triggers.emplace_back(tg);
   }
 
@@ -524,6 +531,14 @@ void WorldObjects::disableTicks(AbstractTrigger& t) {
       }
   }
 
+void WorldObjects::setCurrentCs(CsCamera* cs) {
+  currentCsCamera = cs;
+  }
+
+CsCamera* WorldObjects::currentCs() const {
+  return currentCsCamera;
+  }
+
 void WorldObjects::enableCollizionZone(CollisionZone& z) {
   collisionZn.push_back(&z);
   }
@@ -551,7 +566,7 @@ void WorldObjects::stopEffect(const VisualFx& vfx) {
     i->stopEffect(vfx);
   }
 
-Item* WorldObjects::addItem(const phoenix::vobs::item& vob) {
+Item* WorldObjects::addItem(const zenkit::VItem& vob) {
   size_t inst = owner.script().findSymbolIndex(vob.instance);
   Item*  it   = addItem(inst,"");
   if(it==nullptr)
@@ -675,7 +690,7 @@ void WorldObjects::addStatic(StaticObj* obj) {
   objStatic.push_back(obj);
   }
 
-void WorldObjects::addRoot(const std::unique_ptr<phoenix::vob>& vob, bool startup) {
+void WorldObjects::addRoot(const std::shared_ptr<zenkit::VirtualObject>& vob, bool startup) {
   auto p = Vob::load(nullptr,owner,*vob,(startup ? Vob::Startup : Vob::None) | Vob::Static);
   if(p==nullptr)
     return;
@@ -739,7 +754,7 @@ Npc* WorldObjects::findNpcNear(const Npc& pl, Npc* def, const SearchOpt& opt) {
       return def;
     }
   auto r = findObj(npcNear,pl,opt);
-  if(r!=nullptr && (!Gothic::inst().doHideFocus() || !r->isDead() ||
+  if(r!=nullptr && (!Gothic::inst().options().hideFocus || !r->isDead() ||
                        r->inventory().iterator(Inventory::T_Ransack).isValid()))
     return r;
   return nullptr;
@@ -835,27 +850,75 @@ void WorldObjects::setMobRoutine(gtime time, std::string_view scheme, int32_t st
   routines.emplace_back(std::move(st));
   }
 
-void WorldObjects::sendPassivePerc(Npc &self, Npc &other, Npc &victum, int32_t perc) {
+void WorldObjects::sendPassivePerc(Npc &self, Npc &other, Npc &victum, Item* itm, int32_t perc) {
   PerceptionMsg m;
   m.what   = perc;
   m.pos    = self.position();
   m.self   = &self;
   m.other  = &other;
   m.victum = &victum;
-
+  if(itm!=nullptr)
+    m.item   = itm->handle().symbol_index();
   sndPerc.push_back(m);
   }
 
-void WorldObjects::sendPassivePerc(Npc &self, Npc &other, Npc &victum, Item &itm, int32_t perc) {
-  PerceptionMsg m;
-  m.what   = perc;
-  m.pos    = self.position();
-  m.self   = &self;
-  m.other  = &other;
-  m.victum = &victum;
-  m.item   = itm.handle().symbol_index();
+void WorldObjects::sendImmediatePerc(Npc& self, Npc& other, Npc& victum, Item* itm, int32_t perc) {
+  const auto pl = owner.player();
+  if(pl==nullptr || pl->bodyStateMasked()==BS_SNEAK)
+    return;
 
-  sndPerc.push_back(m);
+  PerceptionMsg r;
+  r.what   = perc;
+  r.pos    = self.position();
+  r.self   = &self;
+  r.other  = &other;
+  r.victum = &victum;
+  if(itm!=nullptr)
+    r.item   = itm->handle().symbol_index();
+
+  for(auto& ptr:npcNear) {
+    passivePerceptionProcess(r, *ptr, *pl);
+    }
+  }
+
+void WorldObjects::passivePerceptionProcess(PerceptionMsg& msg, Npc& npc, Npc& pl) {
+  if(npc.isPlayer() || npc.isDead())
+    return;
+
+  if(npc.processPolicy()!=Npc::AiNormal)
+    return;
+
+  if(msg.self==&npc)
+    return;
+
+  const float distance = npc.qDistTo(msg.pos);
+  const float range    = float(owner.script().percRanges().at(PercType(msg.what), npc.handle().senses_range));
+
+  if(distance > range*range)
+    return;
+
+  if(npc.isDown() || npc.isPlayer())
+    return;
+
+  if(msg.other==nullptr)
+    return;
+
+  /*
+  // active only
+  const bool active = isActivePerception(PercType(msg.what));
+  if(active && npc.canSenseNpc(*msg.other, true)==SensesBit::SENSE_NONE) {
+    return;
+    }
+
+  // approximation of behavior of original G2
+  if(active && msg.victum!=nullptr && npc.canSenseNpc(*msg.victum,true,float(msg.other->handle().senses_range))==SensesBit::SENSE_NONE) {
+    return;
+    }
+  */
+
+  if(msg.item!=size_t(-1) && msg.other!=nullptr)
+    owner.script().setInstanceItem(*msg.other,msg.item);
+  npc.perceptionProcess(*msg.other,msg.victum,distance,PercType(msg.what));
   }
 
 void WorldObjects::resetPositionToTA() {
@@ -923,7 +986,7 @@ static bool checkFlag(Npc& n,WorldObjects::SearchFlg f){
   }
 
 static bool checkFlag(Interactive& i,WorldObjects::SearchFlg f){
-  if(bool(f&WorldObjects::FcOverride)!=i.overrideFocus())
+  if(bool(f&WorldObjects::FcOverride) && !i.overrideFocus())
     return false;
   return true;
   }

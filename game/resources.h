@@ -5,15 +5,14 @@
 #include <Tempest/Device>
 #include <Tempest/SoundDevice>
 
-#include <phoenix/vdfs.hh>
-#include <phoenix/world/vob_tree.hh>
+#include <zenkit/Vfs.hh>
+#include <zenkit/world/VobTree.hh>
 
 #include <tuple>
 #include <string_view>
 #include <map>
 
 #include "graphics/material.h"
-#include "phoenix/Vfs.hh"
 #include "sound/soundfx.h"
 
 class StaticMesh;
@@ -49,7 +48,7 @@ class Resources final {
       };
 
     static const size_t MAX_NUM_SKELETAL_NODES = 96;
-    static const size_t MAX_MORPH_LAYERS       = 3;
+    static const size_t MAX_MORPH_LAYERS       = 4;
 
     struct Vertex {
       float    pos[3];
@@ -77,7 +76,7 @@ class Resources final {
       Tempest::Vec3 color;
       };
 
-    using VobTree = std::vector<std::unique_ptr<phoenix::vob>>;
+    using VobTree = std::vector<std::shared_ptr<zenkit::VirtualObject>>;
 
     static Tempest::Device&          device() { return inst->dev; }
     static const char*               renderer();
@@ -97,7 +96,7 @@ class Resources final {
     static const Tempest::Texture2d* loadTexture(std::string_view name, int32_t v, int32_t c);
     static       Tempest::Texture2d  loadTexturePm(const Tempest::Pixmap& pm);
     static auto                      loadTextureAnim(std::string_view name) -> std::vector<const Tempest::Texture2d*>;
-    static       Material            loadMaterial(const phoenix::material& src, bool enableAlphaTest);
+    static       Material            loadMaterial(const zenkit::Material& src, bool enableAlphaTest);
 
     static const AttachBinder*       bindMesh       (const ProtoMesh& anim, const Skeleton& s);
     static const ProtoMesh*          loadMesh       (std::string_view name);
@@ -107,7 +106,7 @@ class Resources final {
     static Tempest::Sound            loadSoundBuffer(std::string_view name);
 
     static Dx8::PatternList          loadDxMusic(std::string_view name);
-    static const ProtoMesh*          decalMesh(const phoenix::vob& vob);
+    static const ProtoMesh*          decalMesh(const zenkit::VirtualObject& vob);
 
     static const VobTree*            loadVobBundle(std::string_view name);
 
@@ -117,7 +116,8 @@ class Resources final {
     template<class V>
     static Tempest::IndexBuffer<V>   ibo(const V* data,size_t sz){ return inst->dev.ibo(data,sz); }
 
-    static Tempest::StorageBuffer    ssbo(const void* data, size_t size) { return inst->dev.ssbo(data,size); }
+    static Tempest::StorageBuffer    ssbo(const void* data, size_t size)         { return inst->dev.ssbo(data,size); }
+    static Tempest::StorageBuffer    ssbo(Tempest::Uninitialized_t, size_t size) { return inst->dev.ssbo(Tempest::Uninitialized,size); }
 
     template<class V, class I>
     static Tempest::AccelerationStructure
@@ -129,12 +129,16 @@ class Resources final {
       return inst->dev.blas(b,i,offset,size);
       }
 
+    static void resetRecycled(uint8_t fId);
+    static void recycle(Tempest::DescriptorSet&& ds);
+    static void recycle(Tempest::StorageBuffer&& ssbo);
+
     static std::vector<uint8_t>      getFileData(std::string_view name);
     static bool                      getFileData(std::string_view name, std::vector<uint8_t>& dat);
-    static phoenix::buffer           getFileBuffer(std::string_view name);
+    static std::unique_ptr<zenkit::Read> getFileBuffer(std::string_view name);
     static bool                      hasFile    (std::string_view fname);
 
-    static const phoenix::Vfs&       vdfsIndex();
+    static const zenkit::Vfs&        vdfsIndex();
 
     static const Tempest::VertexBuffer<VertexFsq>& fsqVbo();
 
@@ -167,11 +171,11 @@ class Resources final {
     void                  detectVdf(std::vector<Archive>& ret, const std::u16string& root);
 
     Tempest::Texture2d*   implLoadTexture(TextureCache& cache, std::string_view cname);
-    Tempest::Texture2d*   implLoadTexture(TextureCache& cache, std::string &&name, const phoenix::buffer& data);
+    Tempest::Texture2d*   implLoadTexture(TextureCache& cache, std::string &&name, zenkit::Read& data);
     ProtoMesh*            implLoadMesh(std::string_view name);
     std::unique_ptr<ProtoMesh> implLoadMeshMain(std::string name);
     std::unique_ptr<Animation> implLoadAnimation(std::string name);
-    ProtoMesh*            implDecalMesh(const phoenix::vob& vob);
+    ProtoMesh*            implDecalMesh(const zenkit::VirtualObject& vob);
     Tempest::Sound        implLoadSoundBuffer(std::string_view name);
     Dx8::PatternList      implLoadDxMusic(std::string_view name);
     GthFont&              implLoadFont(std::string_view fname, FontType type);
@@ -211,10 +215,17 @@ class Resources final {
 
     std::recursive_mutex              sync;
     std::unique_ptr<Dx8::DirectMusic> dxMusic;
-    phoenix::Vfs                      gothicAssets;
+    zenkit::Vfs                       gothicAssets;
 
     std::vector<uint8_t>              fBuff, ddsBuf;
     Tempest::VertexBuffer<VertexFsq>  fsq;
+
+    struct DeleteQueue {
+      std::vector<Tempest::DescriptorSet> ds;
+      std::vector<Tempest::StorageBuffer> ssbo;
+      };
+    DeleteQueue recycled[MaxFramesInFlight];
+    uint8_t     recycledId = 0;
 
     TextureCache                                                      texCache;
     std::map<Tempest::Color,std::unique_ptr<Tempest::Texture2d>,Less> pixCache;

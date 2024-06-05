@@ -2,7 +2,7 @@
 
 #include <Tempest/Log>
 
-#include <phoenix/vobs/trigger.hh>
+#include <zenkit/vobs/Trigger.hh>
 
 #include "world/objects/npc.h"
 #include "world/world.h"
@@ -10,10 +10,8 @@
 
 using namespace Tempest;
 
-AbstractTrigger::AbstractTrigger(Vob* parent, World &world, const phoenix::vob& data, Flags flags)
+AbstractTrigger::AbstractTrigger(Vob* parent, World &world, const zenkit::VirtualObject& data, Flags flags)
   : Vob(parent,world,data,flags & (~Flags::Static)), callback(this), vobName(data.vob_name) {
-  if(!hasFlag(StartEnabled))
-    ;//disabled = true;
   bboxSize   = Vec3(data.bbox.max.x-data.bbox.min.x,data.bbox.max.y-data.bbox.min.y,data.bbox.max.z-data.bbox.min.z)*0.5f;
   bboxOrigin = Vec3(data.bbox.max.x+data.bbox.min.x,data.bbox.max.y+data.bbox.min.y,data.bbox.max.z+data.bbox.min.z)*0.5f;
   bboxOrigin = bboxOrigin - position();
@@ -26,18 +24,24 @@ AbstractTrigger::AbstractTrigger(Vob* parent, World &world, const phoenix::vob& 
       });
     }
 
-  using phoenix::vob_type;
+  using zenkit::VirtualObjectType;
 
-  if (data.type == vob_type::zCTrigger || data.type == vob_type::zCTriggerList ||
-      data.type == vob_type::oCTriggerScript || data.type == vob_type::zCMover ||
-      data.type == vob_type::oCTriggerChangeLevel || data.type == vob_type::oCCSTrigger) {
-    auto& trigger = reinterpret_cast<const phoenix::vobs::trigger&>(data);
-    fireDelaySec = trigger.fire_delay_sec;
-    maxActivationCount = uint32_t(trigger.max_activation_count);
-    filterFlags = trigger.filter_flags;
-    triggerFlags = trigger.flags;
-    target = trigger.target;
-  }
+  if(data.type == VirtualObjectType::zCTrigger            || data.type == VirtualObjectType::zCTriggerList ||
+     data.type == VirtualObjectType::oCTriggerScript      || data.type == VirtualObjectType::zCMover ||
+     data.type == VirtualObjectType::oCTriggerChangeLevel || data.type == VirtualObjectType::oCCSTrigger) {
+    auto& trigger = reinterpret_cast<const zenkit::VTrigger&>(data);
+    fireDelay          = uint64_t(trigger.fire_delay_sec*1000.f);
+    retriggerDelay     = uint64_t(trigger.retrigger_delay_sec*1000.f);
+    maxActivationCount = (data.type==VirtualObjectType::zCMover && trigger.max_activation_count!=0) ? uint32_t(-1) : uint32_t(trigger.max_activation_count);
+    target             = trigger.target;
+    disabled           = !trigger.start_enabled;
+    sendUntrigger      = trigger.send_untrigger;
+    reactToOnTrigger   = trigger.react_to_on_trigger;
+    reactToOnTouch     = trigger.react_to_on_touch;
+    respondToNpc       = trigger.respond_to_npc;
+    respondToPlayer    = trigger.respond_to_pc;
+    respondToObject    = trigger.respond_to_object;
+    }
 
   world.addTrigger(this);
   }
@@ -52,26 +56,54 @@ bool AbstractTrigger::isEnabled() const {
   return !disabled;
   }
 
+void AbstractTrigger::processDelayedEvents() {
+  if(!hasDelayedEvents())
+    return;
+  if(world.tickCount()<delayedEvent.timeBarrier)
+    return;
+  auto evt = std::move(delayedEvent);
+  delayedEvent = TriggerEvent();
+  implProcessEvent(evt);
+  }
+
 void AbstractTrigger::processEvent(const TriggerEvent& evt) {
-  if(emitTimeLast>0 && world.tickCount()<emitTimeLast+uint64_t(fireDelaySec*1000.f)) {
-    world.triggerEvent(evt);
+  if(hasDelayedEvents()) {
+    // discard, if already have pending
     return;
     }
-  emitTimeLast = world.tickCount();
+  if(0!=emitTimeLast && world.tickCount()<emitTimeLast+retriggerDelay) {
+    // need to discard event
+    return;
+    }
+  if(fireDelay>0) {
+    TriggerEvent ex(evt.target, evt.emitter, world.tickCount() + fireDelay, evt.type);
+    delayedEvent = std::move(ex);
+    return;
+    }
+  implProcessEvent(evt);
+  }
 
+void AbstractTrigger::implProcessEvent(const TriggerEvent& evt) {
+  emitTimeLast = world.tickCount();
   switch(evt.type) {
     case TriggerEvent::T_Startup:
     case TriggerEvent::T_StartupFirstTime:
     case TriggerEvent::T_Trigger:
-      if(disabled) {
+    case TriggerEvent::T_Touch:
+      if(!reactToOnTouch && evt.type==TriggerEvent::T_Touch)
         return;
-        }
+      if(!reactToOnTrigger && evt.type==TriggerEvent::T_Trigger)
+        return;
+      if(disabled)
+        return;
+      if(emitCount>=maxActivationCount)
+        return;
+      ++emitCount;
       onTrigger(evt);
       break;
     case TriggerEvent::T_Untrigger:
-      if(disabled) {
+      if(disabled || !sendUntrigger)
         return;
-        }
       onUntrigger(evt);
       break;
     case TriggerEvent::T_Enable:
@@ -83,17 +115,6 @@ void AbstractTrigger::processEvent(const TriggerEvent& evt) {
     case TriggerEvent::T_ToggleEnable:
       disabled = !disabled;
       break;
-    case TriggerEvent::T_Activate: {
-      const bool canActivate = (maxActivationCount<=0 ||
-                                emitCount<maxActivationCount);
-      if(canActivate) {
-        ++emitCount;
-        onTrigger(evt);
-        } else {
-        //Log::d("skip trigger: ",evt.target," [emitCount]");
-        }
-      break;
-      }
     case TriggerEvent::T_Move: {
       onGotoMsg(evt);
       };
@@ -114,23 +135,8 @@ void AbstractTrigger::moveEvent() {
   boxNpc.setPosition(position()+bboxOrigin);
   }
 
-bool AbstractTrigger::hasFlag(ReactFlg flg) const {
-  ReactFlg filter = ReactFlg(triggerFlags & filterFlags);
-  return (filter&flg)==flg;
-  }
-
 void AbstractTrigger::onIntersect(Npc& n) {
-  /* NOTE:
-   *
-   * In Adanaos temple trap-movers have:
-   *  flags       = 0b00000011
-   *  filterFlags = 0b00011001
-   *
-   * smaller doors in temple:
-   *  flags       = 0b00000011
-   *  filterFlags = 0b00110011
-   */
-  if(!hasFlag(n.isPlayer() ? RespondToPC : RespondToNPC) && !hasFlag(ReactToOnTouch))
+  if((n.isPlayer() ? !respondToPlayer : !respondToNpc) || !reactToOnTouch)
     return;
 
   if(!isEnabled())
@@ -138,7 +144,7 @@ void AbstractTrigger::onIntersect(Npc& n) {
 
   if(boxNpc.intersections().size()==1) {
     // enableTicks();
-    TriggerEvent e("","",TriggerEvent::T_Activate);
+    TriggerEvent e("","",TriggerEvent::T_Touch);
     processEvent(e);
     }
   }
@@ -146,23 +152,14 @@ void AbstractTrigger::onIntersect(Npc& n) {
 void AbstractTrigger::tick(uint64_t) {
   }
 
-bool AbstractTrigger::hasVolume() const {
-  if( bboxSize.x>0 &&
-      bboxSize.y>0 &&
-      bboxSize.z>0 )
-    return true;
-  return false;
-  }
-
-bool AbstractTrigger::checkPos(const Tempest::Vec3& pos) const {
-  return boxNpc.checkPos(pos);
-  }
-
 void AbstractTrigger::save(Serialize& fout) const {
   Vob::save(fout);
   boxNpc.save(fout);
   fout.write(emitCount,disabled);
   fout.write(emitTimeLast);
+
+  delayedEvent.save(fout);
+  fout.write(ticksEnabled);
   }
 
 void AbstractTrigger::load(Serialize& fin) {
@@ -170,13 +167,31 @@ void AbstractTrigger::load(Serialize& fin) {
   boxNpc.load(fin);
   fin.read(emitCount,disabled);
   fin.read(emitTimeLast);
+
+  if(fin.version()>=47)
+    delayedEvent.load(fin);
+  if(fin.version()>=48) {
+    fin.read(ticksEnabled);
+    if(ticksEnabled)
+      world.enableTicks(*this);
+    }
+  }
+
+bool AbstractTrigger::hasDelayedEvents() const {
+  return !delayedEvent.target.empty();
   }
 
 void AbstractTrigger::enableTicks() {
+  if(ticksEnabled)
+    return;
+  ticksEnabled = true;
   world.enableTicks(*this);
   }
 
 void AbstractTrigger::disableTicks() {
+  if(!ticksEnabled)
+    return;
+  ticksEnabled = false;
   world.disableTicks(*this);
   }
 
@@ -184,10 +199,12 @@ const std::vector<Npc*>& AbstractTrigger::intersections() const {
   return boxNpc.intersections();
   }
 
-void AbstractTrigger::Cb::onCollide(DynamicWorld::BulletBody&) {
-  if(!tg->hasFlag(ReactToOnTouch))
+void AbstractTrigger::Cb::onCollide(DynamicWorld::BulletBody& b) {
+  if(!tg->respondToObject || !tg->reactToOnTouch)
     return;
-  TriggerEvent ex(tg->vobName,tg->vobName,tg->world.tickCount(),TriggerEvent::T_Activate);
+  if(b.isSpell())
+    return;
+  TriggerEvent ex(tg->vobName,tg->vobName,tg->world.tickCount(),TriggerEvent::T_Touch);
   tg->processEvent(ex);
   }
 

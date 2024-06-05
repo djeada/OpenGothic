@@ -52,6 +52,9 @@ void PlayerControl::onKeyPressed(KeyCodec::Action a, Tempest::KeyEvent::KeyType 
   auto       ws   = pl ? pl->weaponState() : WeaponState::NoWeapon;
   uint8_t    slot = pl ? pl->inventory().currentSpellSlot() : Item::NSLOT;
 
+  if(w!=nullptr && w->isCutsceneLock())
+    return;
+
   handleMovementAction(KeyCodec::ActionMapping{a,mapping}, true);
 
   if(pl!=nullptr && pl->interactive()!=nullptr && c!=nullptr && !c->isFree()) {
@@ -410,14 +413,6 @@ void PlayerControl::toggleSneakMode() {
     pl->setWalkMode(pl->walkMode()^WalkBit::WM_Sneak);
   }
 
-WeaponState PlayerControl::weaponState() const {
-  auto w = Gothic::inst().world();
-  if(w==nullptr || w->player()==nullptr)
-    return WeaponState::NoWeapon;
-  auto pl = w->player();
-  return pl->weaponState();
-  }
-
 bool PlayerControl::canInteract() const {
   auto w = Gothic::inst().world();
   if(w==nullptr || w->player()==nullptr)
@@ -451,11 +446,11 @@ void PlayerControl::marvinF8(uint64_t dt) {
   pl.changeAttribute(ATR_HITPOINTS,pl.attribute(ATR_HITPOINTSMAX),false);
   pl.changeAttribute(ATR_MANA,     pl.attribute(ATR_MANAMAX),     false);
   pl.clearState(false);
-  pl.setPosition(pos);
   pl.clearSpeed();
+  pl.clearAiQueue();
+  pl.setPosition(pos);
   pl.setInteraction(nullptr,true);
   pl.setAnim(AnimationSolver::Idle);
-  pl.clearAiQueue();
 
   if(auto c = Gothic::inst().camera())
     c->reset();
@@ -475,8 +470,8 @@ void PlayerControl::marvinK(uint64_t dt) {
   pos += dp * 6000 * float(dt) / 1000.f;
 
   pl.clearState(false);
-  pl.setPosition(pos);
   pl.clearSpeed();
+  pl.setPosition(pos);
   pl.setInteraction(nullptr,true);
   // pl.setAnim(AnimationSolver::Idle); // Original G2 behaviour: K doesn't stop running
   }
@@ -493,9 +488,12 @@ void PlayerControl::marvinO() {
 
 Focus PlayerControl::findFocus(Focus* prev) {
   auto w = Gothic::inst().world();
+  auto c = Gothic::inst().camera();
   if(w==nullptr)
     return Focus();
   if(w->player()!=nullptr && w->player()->isDown())
+    return Focus();
+  if(c!=nullptr && c->isCutscene())
     return Focus();
   if(!cacheFocus)
     prev = nullptr;
@@ -503,6 +501,40 @@ Focus PlayerControl::findFocus(Focus* prev) {
   if(prev)
     return w->findFocus(*prev);
   return w->findFocus(Focus());
+  }
+
+bool PlayerControl::tickCameraMove(uint64_t dt) {
+  auto w = Gothic::inst().world();
+  if(w==nullptr)
+    return false;
+
+  Npc*  pl     = w->player();
+  auto  camera = Gothic::inst().camera();
+  if(camera==nullptr || (pl!=nullptr && !camera->isFree()))
+    return false;
+
+  rotMouse = 0;
+  if(ctrl[KeyCodec::Left] || (ctrl[KeyCodec::RotateL] && ctrl[KeyCodec::Jump])) {
+    camera->moveLeft(dt);
+    return true;
+    }
+  if(ctrl[KeyCodec::Right] || (ctrl[KeyCodec::RotateR] && ctrl[KeyCodec::Jump])) {
+    camera->moveRight(dt);
+    return true;
+    }
+
+  auto turningVal = movement.turnRightLeft.value();
+  if(turningVal > 0.f)
+    camera->rotateRight(dt);
+  else if(turningVal < 0.f)
+    camera->rotateLeft(dt);
+
+  auto forwardVal = movement.forwardBackward.value();
+  if(forwardVal > 0.f)
+    camera->moveForward(dt);
+  else if(forwardVal < 0.f)
+    camera->moveBack(dt);
+  return true;
   }
 
 bool PlayerControl::tickMove(uint64_t dt) {
@@ -514,30 +546,11 @@ bool PlayerControl::tickMove(uint64_t dt) {
   Npc*  pl     = w->player();
   auto  camera = Gothic::inst().camera();
 
-  if(camera!=nullptr && (camera->isFree() || pl==nullptr)) {
-    rotMouse = 0;
-    if(ctrl[KeyCodec::Left] || (ctrl[KeyCodec::RotateL] && ctrl[KeyCodec::Jump])) {
-      camera->moveLeft(dt);
-      return true;
-      }
-    if(ctrl[KeyCodec::Right] || (ctrl[KeyCodec::RotateR] && ctrl[KeyCodec::Jump])) {
-      camera->moveRight(dt);
-      return true;
-      }
+  if(w->isCutsceneLock())
+    clearInput();
 
-    auto turningVal = movement.turnRightLeft.value();
-    if(turningVal > 0.f)
-      camera->rotateRight(dt);
-    else if(turningVal < 0.f)
-      camera->rotateLeft(dt);
-
-    auto forwardVal = movement.forwardBackward.value();
-    if(forwardVal > 0.f)
-      camera->moveForward(dt);
-    else if(forwardVal < 0.f)
-      camera->moveBack(dt);
+  if(tickCameraMove(dt))
     return true;
-    }
 
   if(ctrl[Action::K_F8] && Gothic::inst().isMarvinEnabled())
     marvinF8(dt);
@@ -550,6 +563,8 @@ bool PlayerControl::tickMove(uint64_t dt) {
   if(pl==nullptr)
     return true;
 
+  static const float speedRotX = 750.f;
+  rotMouse = std::min(std::abs(rotMouse), speedRotX*dtF) * (rotMouse>=0 ? 1 : -1);
   implMove(dt);
 
   float runAngle = pl->runAngle();
@@ -580,13 +595,14 @@ void PlayerControl::implMove(uint64_t dt) {
   float rotY      = pl.rotationY();
   float rspeed    = (pl.weaponState()==WeaponState::NoWeapon ? 90.f : 180.f)*(float(dt)/1000.f);
   auto  ws        = pl.weaponState();
+  auto  bs        = pl.bodyStateMasked();
   bool  allowRot  = !ctrl[KeyCodec::ActionGeneric] && pl.isRotationAllowed();
 
   Npc::Anim ani = Npc::Anim::Idle;
 
-  if(pl.bodyStateMasked()==BS_DEAD)
+  if(bs==BS_DEAD)
     return;
-  if(pl.bodyStateMasked()==BS_UNCONSCIOUS)
+  if(bs==BS_UNCONSCIOUS)
     return;
 
   if(!pl.isAiQueueEmpty()) {
@@ -696,7 +712,7 @@ void PlayerControl::implMove(uint64_t dt) {
     if(actrl[ActGeneric] || actrl[ActForward]) {
       if(auto other = pl.target()) {
         auto dp = other->position()-pl.position();
-        pl.turnTo(dp.x,dp.z,false,dt);
+        pl.turnTo(dp.x,dp.z,true,dt);
         pl.aimBow();
         } else
       if(currentFocus.interactive!=nullptr) {
@@ -718,10 +734,10 @@ void PlayerControl::implMove(uint64_t dt) {
     }
 
   if(ws==WeaponState::Mage) {
-    if(actrl[ActGeneric] || actrl[ActForward]) {
+    if(actrl[ActGeneric] || actrl[ActForward] || ctrl[KeyCodec::ActionGeneric]) {
       if(auto other = pl.target()) {
         auto dp = other->position()-pl.position();
-        pl.turnTo(dp.x,dp.z,false,dt);
+        pl.turnTo(dp.x,dp.z,true,dt);
         } else
       if(currentFocus.interactive!=nullptr) {
         auto dp = currentFocus.interactive->position()-pl.position();
@@ -818,7 +834,8 @@ void PlayerControl::implMove(uint64_t dt) {
   if(this->wantsToMoveForward()) {
     if((pl.walkMode()&WalkBit::WM_Dive)!=WalkBit::WM_Dive) {
       ani = Npc::Anim::Move;
-      } else if(pl.isDive()) {
+      }
+    else if(pl.isDive()) {
       pl.setDirectionY(rotY - rspeed);
       return;
       }
@@ -852,7 +869,7 @@ void PlayerControl::implMove(uint64_t dt) {
       auto& g  = w->script().guildVal();
       auto  gl = pl.guild();
 
-      if(0<=gl && gl<GIL_MAX) {
+      if(0<=gl && gl<GIL_MAX && pl.isStanding()) {
         MoveAlgo::JumpStatus jump;
         jump.anim   = Npc::Anim::JumpUp;
         jump.height = float(g.jumpup_height[gl])+pl.position().y;
@@ -892,6 +909,11 @@ void PlayerControl::implMove(uint64_t dt) {
         // no charge to strafe transition
         ani = Npc::Anim::NoAnim;
         }
+      }
+
+    if(bs==BS_LIE) {
+      ani = (ani==Npc::Anim::Move) ? Npc::Anim::Idle : Npc::Anim::NoAnim;
+      rot = pl.rotation();
       }
 
     if(ani!=Npc::Anim::NoAnim)

@@ -1,75 +1,154 @@
 #pragma once
 
-#include <Tempest/Signal>
+#include "drawbuckets.h"
+#include "drawclusters.h"
+#include "drawcommands.h"
+#include "instancestorage.h"
 
-#include "objectsbucket.h"
+#include <unordered_set>
 
 class SceneGlobals;
-class Bindless;
-class AnimMesh;
+class Camera;
+class RtScene;
+class Landscape;
 class Sky;
+class AnimMesh;
 
 class VisualObjects final {
   public:
+    class Item final {
+      public:
+      Item()=default;
+      Item(VisualObjects& owner,size_t id)
+          :owner(&owner),id(id){}
+      Item(Item&& obj):owner(obj.owner),id(obj.id){
+        obj.owner=nullptr;
+        obj.id   =0;
+        }
+      Item& operator=(Item&& obj) {
+        std::swap(obj.owner,owner);
+        std::swap(obj.id,   id);
+        return *this;
+        }
+      ~Item() {
+        if(owner)
+          owner->free(this->id);
+        }
+
+      bool     isEmpty() const { return owner==nullptr; }
+
+      void     setObjMatrix(const Tempest::Matrix4x4& mt);
+      void     setAsGhost  (bool g);
+      void     setFatness  (float f);
+      void     setWind     (zenkit::AnimationType m, float intensity);
+      void     startMMAnim (std::string_view anim, float intensity, uint64_t timeUntil);
+
+      const Material&    material() const;
+      const Bounds&      bounds()   const;
+      Tempest::Matrix4x4 position() const;
+      const StaticMesh*  mesh()     const;
+      std::pair<uint32_t,uint32_t> meshSlice() const;
+
+      private:
+      VisualObjects* owner = nullptr;
+      size_t         id    = 0;
+      };
+
     VisualObjects(const SceneGlobals& globals, const std::pair<Tempest::Vec3, Tempest::Vec3>& bbox);
     ~VisualObjects();
 
-    ObjectsBucket::Item get(const StaticMesh& mesh, const Material& mat,
-                            size_t iboOffset, size_t iboLength, bool staticDraw);
-    ObjectsBucket::Item get(const StaticMesh& mesh, const Material& mat,
-                            size_t iboOff, size_t iboLen,
-                            const Tempest::StorageBuffer& desc,
-                            const Bounds& bbox, ObjectsBucket::Type bucket);
-    ObjectsBucket::Item get(const AnimMesh& mesh, const Material& mat,
-                            size_t iboOff, size_t iboLen,
-                            const MatrixStorage::Id& anim);
-    ObjectsBucket::Item get(const Material& mat);
+    Item   get(const StaticMesh& mesh, const Material& mat, size_t iboOffset, size_t iboLength, bool staticDraw);
+    Item   get(const AnimMesh& mesh,   const Material& mat, size_t iboOff, size_t iboLen, const InstanceStorage::Id& anim);
+    Item   get(const StaticMesh& mesh, const Material& mat, size_t iboOff, size_t iboLen, const PackedMesh::Cluster* cluster, DrawCommands::Type type);
 
-    MatrixStorage::Id   getMatrixes(Tempest::BufferHeap heap, size_t boneCnt);
-    auto                matrixSsbo (Tempest::BufferHeap heap, uint8_t fId) const -> const Tempest::StorageBuffer&;
+    InstanceStorage::Id alloc(size_t size);
+    bool                realloc(InstanceStorage::Id& id, size_t size);
+    auto                instanceSsbo() const -> const Tempest::StorageBuffer&;
 
-    void setupUbo();
+    void prepareUniforms();
     void preFrameUpdate (uint8_t fId);
-    void visibilityPass (const Frustrum fr[]);
+    void prepareGlobals (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId);
+    void postFrameupdate();
 
-    void drawTranslucent(Tempest::Encoder<Tempest::CommandBuffer>& enc, uint8_t fId);
-    void drawWater      (Tempest::Encoder<Tempest::CommandBuffer>& enc, uint8_t fId);
-    void drawGBuffer    (Tempest::Encoder<Tempest::CommandBuffer>& enc, uint8_t fId);
-    void drawShadow     (Tempest::Encoder<Tempest::CommandBuffer>& enc, uint8_t fId, int layer);
-    void drawHiZ        (Tempest::Encoder<Tempest::CommandBuffer>& enc, uint8_t fId);
+    void visibilityPass (Tempest::Encoder<Tempest::CommandBuffer> &cmd, uint8_t frameId, int pass);
 
-    void resetIndex();
-    void resetTlas();
-    void recycle(Tempest::DescriptorSet&& del);
+    void drawTranslucent(Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId);
+    void drawWater      (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId);
+    void drawGBuffer    (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId);
+    void drawShadow     (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId, int layer);
+    void drawHiZ        (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId);
 
-    void updateTlas(Bindless& out, uint8_t fId);
+    void notifyTlas(const Material& m, RtScene::Category cat);
+    bool updateRtScene(RtScene& out);
 
-    void setLandscapeBlas(const Tempest::AccelerationStructure* blas);
-    Tempest::Signal<void(const Tempest::AccelerationStructure* tlas)> onTlasChanged;
+    void dbgClusters(Tempest::Painter& p, Tempest::Vec2 wsz);
 
   private:
-    ObjectsBucket&                  getBucket(ObjectsBucket::Type type, const Material& mat,
-                                              const StaticMesh* st, const AnimMesh* anim, const Tempest::StorageBuffer* desc);
+    struct InstanceDesc;
+    struct MorphDesc;
+    struct MorphData;
 
-    void                            mkIndex();
-    void                            commitUbo(uint8_t fId);
+    struct MorphAnim {
+      size_t   id        = 0;
+      uint64_t timeStart = 0;
+      uint64_t timeUntil = 0;
+      float    intensity = 0;
+      };
 
-    const SceneGlobals&             globals;
-    VisibilityGroup                 visGroup;
-    MatrixStorage                   matrix;
+    struct Object {
+      bool     isEmpty() const { return cmdId==uint16_t(-1); }
 
-    std::vector<std::unique_ptr<ObjectsBucket>> buckets;
-    std::vector<ObjectsBucket*>                 index;
-    size_t                                      lastSolidBucket = 0;
+      Tempest::Matrix4x4  pos;
+      InstanceStorage::Id objInstance;
+      InstanceStorage::Id objMorphAnim;
 
-    std::vector<Tempest::DescriptorSet>         recycled[Resources::MaxFramesInFlight];
-    uint8_t                                     recycledId = 0;
+      DrawCommands::Type  type      = DrawCommands::Type::Landscape;
+      uint32_t            iboOff    = 0;
+      uint32_t            iboLen    = 0;
+      uint32_t            animPtr   = 0;
+      DrawBuckets::Id     bucketId;
+      uint16_t            cmdId     = uint16_t(-1);
+      uint32_t            clusterId = 0;
+      uint64_t            timeShift = 0;
 
-    bool                                        needtoInvalidateTlas = false;
-    Tempest::AccelerationStructure              tlas;
-    const Tempest::AccelerationStructure*       landBlas = nullptr;
+      Material::AlphaFunc alpha = Material::Solid;
+      MorphAnim           morphAnim[Resources::MAX_MORPH_LAYERS];
+      zenkit::AnimationType wind        = zenkit::AnimationType::NONE;
+      float               windIntensity = 0;
+      float               fatness       = 0;
+      bool                isGhost       = false;
+      };
 
-  friend class ObjectsBucket;
-  friend class ObjectsBucket::Item;
+    void     preFrameUpdateWind(uint8_t fId);
+    void     preFrameUpdateMorph(uint8_t fId);
+
+    size_t   implAlloc();
+    void     free(size_t id);
+
+    uint32_t clusterId(const PackedMesh::Cluster* cx, size_t firstMeshlet, size_t meshletCount, uint16_t bucketId, uint16_t commandId);
+    uint32_t clusterId(const DrawBuckets::Bucket& bucket, size_t firstMeshlet, size_t meshletCount, uint16_t bucketId, uint16_t commandId);
+
+    void     startMMAnim(size_t i, std::string_view animName, float intensity, uint64_t timeUntil);
+    void     setAsGhost(size_t i, bool g);
+
+    void     updateInstance(size_t id, Tempest::Matrix4x4* pos = nullptr);
+    void     updateRtAs(size_t id);
+
+    void     dbgDraw(Tempest::Painter& p, Tempest::Vec2 wsz, const Camera& cam, const DrawClusters::Cluster& cx);
+    void     dbgDrawBBox(Tempest::Painter& p, Tempest::Vec2 wsz, const Camera& cam, const DrawClusters::Cluster& c);
+
+    const SceneGlobals&        scene;
+
+    InstanceStorage            instanceMem;
+    DrawBuckets                bucketsMem;
+    DrawClusters               clusters;
+    DrawCommands               drawCmd;
+
+    std::vector<Object>        objects;
+    std::unordered_set<size_t> objectsWind;
+    std::unordered_set<size_t> objectsMorph;
+    std::unordered_set<size_t> objectsFree;
+
+    friend class Item;
   };
 

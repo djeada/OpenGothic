@@ -3,7 +3,7 @@
 #include <Tempest/Painter>
 #include <Tempest/Log>
 
-#include <phoenix/vobs/mob.hh>
+#include <zenkit/vobs/MovableObject.hh>
 
 #include "game/serialize.h"
 #include "graphics/mesh/skeleton.h"
@@ -25,7 +25,7 @@ static Npc::Anim toNpcAnim(Interactive::Anim dir) {
   return Npc::Anim::InteractIn;
   }
 
-Interactive::Interactive(Vob* parent, World &world, const phoenix::vobs::mob& vob, Flags flags)
+Interactive::Interactive(Vob* parent, World &world, const zenkit::VMovableObject& vob, Flags flags)
   : Vob(parent,world,vob,flags) {
 
   vobName       = vob.vob_name;
@@ -39,9 +39,9 @@ Interactive::Interactive(Vob* parent, World &world, const phoenix::vobs::mob& vo
   auto p = position();
   displayOffset = Tempest::Vec3(0,bbox[1].y-p.y,0);
 
-  if(vob.type != phoenix::vob_type::oCMOB) {
+  if(vob.type != zenkit::VirtualObjectType::oCMOB) {
     // TODO: These might be movable
-    auto& inter = reinterpret_cast<const phoenix::vobs::mob_inter&>(vob);
+    auto& inter = reinterpret_cast<const zenkit::VInteractiveObject&>(vob);
     stateNum      = inter.state;
     triggerTarget = inter.target;
     useWithItem   = inter.item;
@@ -53,15 +53,15 @@ Interactive::Interactive(Vob* parent, World &world, const phoenix::vobs::mob& vo
   for(auto& i:owner)
     i = char(std::toupper(i));
 
-  if(vobType==phoenix::vob_type::oCMobDoor) {
-    auto& door = reinterpret_cast<const phoenix::vobs::mob_door&>(vob);
+  if(vobType==zenkit::VirtualObjectType::oCMobDoor) {
+    auto& door = reinterpret_cast<const zenkit::VDoor&>(vob);
     locked      = door.locked;
     keyInstance = door.key;
     pickLockStr = door.pick_string;
     }
 
   if(isContainer() && (flags&Flags::Startup)==Flags::Startup) {
-    auto& container = reinterpret_cast<const phoenix::vobs::mob_container&>(vob);
+    auto& container = reinterpret_cast<const zenkit::VContainer&>(vob);
     locked      = container.locked;
     keyInstance = container.key;
     pickLockStr = container.pick_string;
@@ -85,7 +85,8 @@ Interactive::Interactive(Vob* parent, World &world, const phoenix::vobs::mob& vo
     }
 
   setVisual(vob);
-  mdlVisual = std::move(vob.visual_name);
+  if(vob.visual!=nullptr)
+    mdlVisual = std::move(vob.visual->name);
 
   if(isLadder() && !mdlVisual.empty()) {
     // NOTE: there must be else way to determinate steps count, nut for now - we parse filename
@@ -187,7 +188,7 @@ void Interactive::resetPositionToTA(int32_t state) {
   setState(state);
   }
 
-void Interactive::setVisual(const phoenix::vob& vob) {
+void Interactive::setVisual(const zenkit::VirtualObject& vob) {
   visual.setVisual(vob,world,true);
   visual.setObjMatrix(transform());
   visual.setInteractive(this);
@@ -230,7 +231,7 @@ void Interactive::tick(uint64_t dt) {
     // Note: oCMobInter::rewind, oCMobInter with killed user has to go back to state=-1
     // All other cases, oCMobFire, oCMobDoor in particular - preserve old state
     const int destSt = -1;
-    if(destSt!=state && (vobType==phoenix::vob_type::oCMobInter || rewind)) {
+    if(destSt!=state && (vobType==zenkit::VirtualObjectType::oCMobInter || rewind)) {
       if(!setAnim(nullptr,Anim::Out))
         return;
       auto prev = state;
@@ -330,7 +331,7 @@ void Interactive::implTick(Pos& p) {
       }
     }
 
-  if((state==0 && !attach) || (isLadder() && (attach && state>=stepsCount-1))) {
+  if((state<=0 && !attach) || (isLadder() && (attach && state>=stepsCount-1))) {
     implQuitInteract(p);
     return;
     }
@@ -353,7 +354,12 @@ void Interactive::implTick(Pos& p) {
 
   if(state==0 && p.attachMode) {
     npc.world().sendPassivePerc(npc,npc,npc,PERC_ASSESSUSEMOB);
-    emitTriggerEvent();
+    emitTriggerEvent(TriggerEvent::T_Trigger);
+    }
+
+  if(state==stateNum && p.attachMode && reverseState) {
+    npc.world().sendPassivePerc(npc,npc,npc,PERC_ASSESSUSEMOB);
+    emitTriggerEvent(TriggerEvent::T_Untrigger);
     }
 
   if(npc.isPlayer() && !loopState && attach) {
@@ -449,15 +455,16 @@ void Interactive::invokeStateFunc(Npc& npc) {
   if(loopState)
     return;
 
+  // TODO: hero only?
   string_frm func(onStateFunc,"_S",state);
   auto& sc = npc.world().script();
   sc.useInteractive(npc.handlePtr(), func);
   }
 
-void Interactive::emitTriggerEvent() const {
+void Interactive::emitTriggerEvent(TriggerEvent::Type type) const {
   if(triggerTarget.empty())
     return;
-  const TriggerEvent evt(triggerTarget,vobName,TriggerEvent::T_Activate);
+  const TriggerEvent evt(triggerTarget,vobName,type);
   world.triggerEvent(evt);
   }
 
@@ -477,11 +484,11 @@ std::string_view Interactive::posSchemeName() const {
   }
 
 bool Interactive::isContainer() const {
-  return vobType==phoenix::vob_type::oCMobContainer;
+  return vobType==zenkit::VirtualObjectType::oCMobContainer;
   }
 
 bool Interactive::isDoor() const {
-  return vobType==phoenix::vob_type::oCMobDoor;
+  return vobType==zenkit::VirtualObjectType::oCMobDoor;
   }
 
 bool Interactive::isTrueDoor(const Npc& npc) const {
@@ -494,7 +501,7 @@ bool Interactive::isTrueDoor(const Npc& npc) const {
   }
 
 bool Interactive::isLadder() const {
-  return vobType==phoenix::vob_type::oCMobLadder;
+  return vobType==zenkit::VirtualObjectType::oCMobLadder;
   }
 
 bool Interactive::needToLockpick(const Npc& pl) const {
@@ -516,18 +523,14 @@ uint32_t Interactive::stateMask() const {
 bool Interactive::canSeeNpc(const Npc& npc, bool freeLos) const {
   for(auto& i:attPos){
     auto pos = nodePosition(npc,i);
-    if(npc.canSeeNpc(pos.x,pos.y,pos.z,freeLos))
+    if(npc.canSeeNpc(pos,freeLos))
       return true;
     }
 
   // graves
   if(attPos.size()==0){
     auto pos = displayPosition();
-
-    float x = pos.x;
-    float y = pos.y;
-    float z = pos.z;
-    if(npc.canSeeNpc(x,y,z,freeLos))
+    if(npc.canSeeNpc(pos,freeLos))
       return true;
     }
   return false;
@@ -734,7 +737,7 @@ bool Interactive::attach(Npc& npc, Interactive::Pos& to) {
 
   setDir(npc,mat);
 
-  if(vobType==phoenix::vob_type::oCMobLadder) {
+  if(vobType==zenkit::VirtualObjectType::oCMobLadder) {
     if(&to!=&attPos[0])
       state = -1; else
       state = stepsCount;
@@ -928,7 +931,7 @@ bool Interactive::setAnim(Npc* npc, Anim dir) {
   if(npc!=nullptr) {
     sqNpc = npc->setAnimAngGet(dest);
     // NOTE: Book-stand has no 'out' animation
-    if(sqNpc==nullptr && !(vobType==phoenix::vob_type::oCMobInter && dir==Anim::Out))
+    if(sqNpc==nullptr && !(vobType==zenkit::VirtualObjectType::oCMobInter && dir==Anim::Out))
       return false;
     }
   sqMob = setAnim(dir);

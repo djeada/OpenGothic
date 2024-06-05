@@ -1,6 +1,6 @@
 #pragma once
 
-#include <phoenix/vobs/trigger.hh>
+#include <zenkit/vobs/Trigger.hh>
 
 #include "graphics/meshobjects.h"
 #include "physics/physicmesh.h"
@@ -8,7 +8,7 @@
 
 class MoveTrigger : public AbstractTrigger {
   public:
-    MoveTrigger(Vob* parent, World &world, const phoenix::vobs::trigger_mover& data, Flags flags);
+    MoveTrigger(Vob* parent, World &world, const zenkit::VMover& data, Flags flags);
 
     void save(Serialize& fout) const override;
     void load(Serialize &fin) override;
@@ -17,7 +17,6 @@ class MoveTrigger : public AbstractTrigger {
     void onUntrigger(const TriggerEvent& evt) override;
     void onGotoMsg(const TriggerEvent& evt) override;
 
-    bool hasVolume() const override;
     void tick(uint64_t dt) override;
 
   private:
@@ -28,7 +27,6 @@ class MoveTrigger : public AbstractTrigger {
     void emitSound   (std::string_view snd, bool freeSlot=true);
     void advanceAnim (uint32_t f0, uint32_t f1, float alpha);
 
-    float pathLength() const;
     void invalidateView();
 
     enum State : int32_t {
@@ -41,25 +39,23 @@ class MoveTrigger : public AbstractTrigger {
       };
 
     struct KeyLen {
-      float    position = 0;
       uint64_t ticks    = 0;
       };
 
-    Tempest::Matrix4x4                     pos0;
-    MeshObjects::Mesh                      view;
-    PhysicMesh                             physic;
-    std::vector<KeyLen>                    keyframes;
-    std::vector<phoenix::animation_sample> mover_keyframes;
-    phoenix::mover_behavior                behavior;
-    std::string                            sfxOpenStart;
-    std::string                            sfxOpenEnd;
-    std::string                            sfxCloseEnd;
-    std::string                            sfxMoving;
-    std::string                            visualName;
-    float                                  stayOpenTimeSec;
+    Tempest::Matrix4x4                   pos0;
+    MeshObjects::Mesh                    view;
+    PhysicMesh                           physic;
+    std::vector<KeyLen>                  keyframes;
+    std::vector<zenkit::AnimationSample> moverKeyFrames;
+    zenkit::MoverBehavior                behavior;
+    std::string                          sfxOpenStart;
+    std::string                          sfxOpenEnd;
+    std::string                          sfxCloseEnd;
+    std::string                          sfxMoving;
+    std::string                          visualName;
+    float                                stayOpenTimeSec;
 
-    State                    state     = Idle;
-    uint64_t                 sAnim     = 0;
-
-    uint32_t                 frame     = 0;
+    State                                state     = Idle;
+    uint64_t                             sAnim     = 0;
+    uint32_t                             frame     = 0;
   };

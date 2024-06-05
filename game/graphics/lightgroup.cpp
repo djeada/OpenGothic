@@ -3,6 +3,8 @@
 #include <Tempest/Dir>
 #include <Tempest/Log>
 
+#include <zenkit/Archive.hh>
+
 #include "graphics/shaders.h"
 #include "graphics/sceneglobals.h"
 #include "utils/string_frm.h"
@@ -49,7 +51,7 @@ LightGroup::Light::Light(LightGroup& owner)
   id = owner.alloc(true);
   }
 
-LightGroup::Light::Light(LightGroup& owner, const phoenix::vobs::light_preset& vob)
+LightGroup::Light::Light(LightGroup& owner, const zenkit::LightPreset& vob)
   :owner(&owner) {
   LightSource l;
   l.setPosition(Vec3(0, 0, 0));
@@ -66,7 +68,7 @@ LightGroup::Light::Light(LightGroup& owner, const phoenix::vobs::light_preset& v
     l.setColor(Vec3(vob.color.r / 255.f, vob.color.g / 255.f, vob.color.b / 255.f));
     }
 
-  // if(vob.light_type==phoenix::light_mode::spot)
+  // if(vob.light_type==zenkit::LightType::spot)
   //   Log::d("");
 
   std::lock_guard<std::recursive_mutex> guard(owner.sync);
@@ -80,8 +82,8 @@ LightGroup::Light::Light(LightGroup& owner, const phoenix::vobs::light_preset& v
   data = std::move(l);
   }
 
-LightGroup::Light::Light(LightGroup& owner, const phoenix::vobs::light& vob)
-      :Light(owner, static_cast<const phoenix::vobs::light_preset&>(vob)) {
+LightGroup::Light::Light(LightGroup& owner, const zenkit::VLight& vob)
+      :Light(owner, static_cast<const zenkit::LightPreset&>(vob)) {
   setPosition(Vec3(vob.position.x,vob.position.y,vob.position.z));
   }
 
@@ -90,12 +92,12 @@ LightGroup::Light::Light(World& owner, std::string_view preset)
   setTimeOffset(owner.tickCount());
   }
 
-LightGroup::Light::Light(World& owner, const phoenix::vobs::light_preset& vob)
+LightGroup::Light::Light(World& owner, const zenkit::LightPreset& vob)
   :Light(owner.view()->sGlobal.lights,vob) {
   setTimeOffset(owner.tickCount());
   }
 
-LightGroup::Light::Light(World& owner, const phoenix::vobs::light& vob)
+LightGroup::Light::Light(World& owner, const zenkit::VLight& vob)
   :Light(owner.view()->sGlobal.lights,vob){
   setTimeOffset(owner.tickCount());
 }
@@ -187,44 +189,30 @@ LightGroup::LightGroup(const SceneGlobals& scene)
       u = device.descriptors(shader().layout());
       }
     }
-
-  static const uint16_t index[36] = {
-    0, 1, 3, 3, 1, 2,
-    1, 5, 2, 2, 5, 6,
-    5, 4, 6, 6, 4, 7,
-    4, 0, 7, 7, 0, 3,
-    3, 2, 7, 7, 2, 6,
-    4, 5, 0, 0, 5, 1
+  static const uint16_t index[] = {
+      0, 1, 2, 0, 2, 3,
+      4, 6, 5, 4, 7, 6,
+      1, 5, 2, 2, 5, 6,
+      4, 0, 7, 7, 0, 3,
+      3, 2, 7, 7, 2, 6,
+      4, 5, 0, 0, 5, 1
     };
-  ibo = device.ibo(index,36);
-
-  static const Vec3 v[8] = {
-    {-1,-1,-1},
-    { 1,-1,-1},
-    { 1, 1,-1},
-    {-1, 1,-1},
-
-    {-1,-1, 1},
-    { 1,-1, 1},
-    { 1, 1, 1},
-    {-1, 1, 1},
-    };
-  vbo = device.vbo(v,8);
+  ibo = device.ibo(index, sizeof(index)/sizeof(index[0]));
 
   try {
-    auto filename = Gothic::inst().nestedPath({u"_work", u"Data", u"Presets", u"LIGHTPRESETS.ZEN"}, Dir::FT_File);
-    auto buf = phoenix::buffer::mmap(filename);
-    auto zen = phoenix::archive_reader::open(buf);
+    auto filename = Gothic::nestedPath({u"_work", u"Data", u"Presets", u"LIGHTPRESETS.ZEN"}, Dir::FT_File);
+    auto buf = zenkit::Read::from(filename);
+    auto zen = zenkit::ReadArchive::from(buf.get());
 
-    phoenix::archive_object obj {};
+    zenkit::ArchiveObject obj {};
     auto count = zen->read_int();
     for(int i = 0; i < count; ++i) {
       zen->read_object_begin(obj);
 
-      presets.push_back(phoenix::vobs::light_preset::parse(
+      presets.push_back(zenkit::LightPreset::parse(
           *zen,
-          Gothic::inst().version().game == 1 ? phoenix::game_version::gothic_1
-                                             : phoenix::game_version::gothic_2));
+          Gothic::inst().version().game == 1 ? zenkit::GameVersion::GOTHIC_1
+                                             : zenkit::GameVersion::GOTHIC_2));
 
       if(!zen->read_object_end()) {
         zen->skip_object(true);
@@ -332,19 +320,19 @@ LightSource& LightGroup::getL(size_t id) {
   }
 
 RenderPipeline& LightGroup::shader() const {
-  if(Gothic::inst().doRayQuery())
+  if(Gothic::options().doRayQuery)
     return Shaders::inst().lightsRq;
   return Shaders::inst().lights;
   }
 
-const phoenix::vobs::light_preset& LightGroup::findPreset(std::string_view preset) const {
+const zenkit::LightPreset& LightGroup::findPreset(std::string_view preset) const {
   for(auto& i:presets) {
     if(i.preset!=preset)
       continue;
     return i;
     }
   Log::e("unknown light preset: \"",preset,"\"");
-  static phoenix::vobs::light_preset zero {};
+  static zenkit::LightPreset zero {};
   return zero;
   }
 
@@ -357,10 +345,10 @@ void LightGroup::tick(uint64_t time) {
     ssbo.pos   = light.position();
     ssbo.color = light.currentColor();
     ssbo.range = light.currentRange();
-
-    for(auto& updated:bucketDyn.updated)
-      updated = false;
     }
+
+  for(auto& updated:bucketDyn.updated)
+    updated = false;
   }
 
 void LightGroup::preFrameUpdate(uint8_t fId) {
@@ -394,38 +382,43 @@ void LightGroup::draw(Encoder<CommandBuffer>& cmd, uint8_t fId) {
   static bool light = true;
   if(!light)
     return;
-  if(Gothic::inst().doRayQuery() && scene.tlas==nullptr)
-    return;
 
   auto& p = shader();
   if(bucketSt.data.size()>0) {
     cmd.setUniforms(p,bucketSt.ubo[fId]);
-    cmd.draw(vbo,ibo, 0,ibo.size(), 0,bucketSt.data.size());
+    cmd.draw(nullptr,ibo, 0,ibo.size(), 0,bucketSt.data.size());
     }
   if(bucketDyn.data.size()>0) {
     cmd.setUniforms(p,bucketDyn.ubo[fId]);
-    cmd.draw(vbo,ibo, 0,ibo.size(), 0,bucketDyn.data.size());
+    cmd.draw(nullptr,ibo, 0,ibo.size(), 0,bucketDyn.data.size());
     }
   }
 
-void LightGroup::setupUbo() {
+void LightGroup::prepareUniforms() {
   LightBucket* bucket[2] = {&bucketSt, &bucketDyn};
   for(auto b:bucket) {
     for(int i=0;i<Resources::MaxFramesInFlight;++i) {
       auto& u = b->ubo[i];
-      u.set(0,*scene.gbufDiffuse,Sampler::nearest());
-      u.set(1,*scene.gbufNormals,Sampler::nearest());
-      u.set(2,*scene.zbuffer,    Sampler::nearest());
-      u.set(3,uboBuf[i]);
-      if(Gothic::inst().doRayQuery() && scene.tlas!=nullptr) {
-        if(Resources::device().properties().bindless.nonUniformIndexing) {
-          u.set(6, Sampler::bilinear());
-          u.set(7, scene.bindless.tex);
-          u.set(8, scene.bindless.vbo);
-          u.set(9, scene.bindless.ibo);
-          u.set(10,scene.bindless.iboOffset);
-          }
-        u.set(5,*scene.tlas);
+      u.set(0, *scene.gbufDiffuse, Sampler::nearest());
+      u.set(1, *scene.gbufNormals, Sampler::nearest());
+      u.set(2, *scene.zbuffer,     Sampler::nearest());
+      u.set(3, uboBuf[i]);
+      }
+    }
+  }
+
+void LightGroup::prepareRtUniforms() {
+  LightBucket* bucket[2] = {&bucketSt, &bucketDyn};
+  for(auto b:bucket) {
+    for(int i=0;i<Resources::MaxFramesInFlight;++i) {
+      auto& u = b->ubo[i];
+      u.set(6,scene.rtScene.tlas);
+      if(Resources::device().properties().descriptors.nonUniformIndexing) {
+        u.set(7, Sampler::bilinear());
+        u.set(8, scene.rtScene.tex);
+        u.set(9, scene.rtScene.vbo);
+        u.set(10,scene.rtScene.ibo);
+        u.set(11,scene.rtScene.rtDesc);
         }
       }
     }

@@ -193,15 +193,19 @@ struct DynamicWorld::NpcBodyList final {
     for(auto i:body) {
       float proj = 0;
       if(rayTest(*i.body, s, e, extR, proj)) {
-        if(proj<minProj)
-          ret = i.body;
+        if(proj<minProj) {
+          ret     = i.body;
+          minProj = proj;
+          }
         }
       }
     for(auto i:frozen) {
       float proj = 0;
       if(i.body!=nullptr && rayTest(*i.body, s, e, extR, proj)) {
-        if(proj<minProj)
-          ret = i.body;
+        if(proj<minProj) {
+          ret     = i.body;
+          minProj = proj;
+          }
         }
       }
     return ret;
@@ -407,7 +411,7 @@ struct DynamicWorld::BBoxList final {
   DynamicWorld&          wrld;
   };
 
-DynamicWorld::DynamicWorld(World& owner,const phoenix::mesh& worldMesh) {
+DynamicWorld::DynamicWorld(World& owner,const zenkit::Mesh& worldMesh) {
   world.reset(new CollisionWorld());
 
   {
@@ -428,7 +432,7 @@ DynamicWorld::DynamicWorld(World& owner,const phoenix::mesh& worldMesh) {
   for(size_t i=0;i<pkg.subMeshes.size();++i) {
     auto& sm = pkg.subMeshes[i];
     if(!sm.material.disable_collision && sm.iboLength>0) {
-      if(sm.material.group==phoenix::material_group::water) {
+      if(sm.material.group==zenkit::MaterialGroup::WATER) {
         waterMesh->addIndex(pkg.indices,sm.iboOffset,sm.iboLength,sm.material.group);
         } else {
         landMesh ->addIndex(pkg.indices,sm.iboOffset,sm.iboLength,sm.material.group,sectors[i].c_str());
@@ -442,7 +446,7 @@ DynamicWorld::DynamicWorld(World& owner,const phoenix::mesh& worldMesh) {
     Tempest::Matrix4x4 mt;
     mt.identity();
     landShape.reset(new btMultimaterialTriangleMeshShape(landMesh.get(),landMesh->useQuantization(),true));
-    landBody = world->addCollisionBody(*landShape,mt,DynamicWorld::materialFriction(phoenix::material_group::none));
+    landBody = world->addCollisionBody(*landShape,mt,DynamicWorld::materialFriction(zenkit::MaterialGroup::NONE));
     landBody->setUserIndex(C_Landscape);
 
     btVector3 b[2] = {btVector3(0,0,0), btVector3(0,0,0)};
@@ -471,7 +475,7 @@ DynamicWorld::DynamicWorld(World& owner,const phoenix::mesh& worldMesh) {
   bulletList.reset(new BulletsList(*this));
   bboxList  .reset(new BBoxList   (*this));
 
-  world->setItemHitCallback([&](::Item& itm, phoenix::material_group mat, float impulse, float mass) {
+  world->setItemHitCallback([&](::Item& itm, zenkit::MaterialGroup mat, float impulse, float mass) {
     auto  snd = owner.addLandHitEffect(ItemMaterial(itm.handle().material),mat,itm.transform());
     float v   = impulse/mass;
     float vol = snd.volume()*std::min(v/10.f,1.f);
@@ -547,9 +551,9 @@ DynamicWorld::RayWaterResult DynamicWorld::implWaterRay(const Tempest::Vec3& fro
 DynamicWorld::RayLandResult DynamicWorld::ray(const Tempest::Vec3& from, const Tempest::Vec3& to) const {
   struct CallBack:btCollisionWorld::ClosestRayResultCallback {
     using ClosestRayResultCallback::ClosestRayResultCallback;
-    phoenix::material_group matId  = phoenix::material_group::undefined;
-    const char*             sector = nullptr;
-    Category                colCat = C_Null;
+    zenkit::MaterialGroup matId  = zenkit::MaterialGroup::UNDEFINED;
+    const char*           sector = nullptr;
+    Category              colCat = C_Null;
 
     bool needsCollision(btBroadphaseProxy* proxy0) const override {
       auto obj=reinterpret_cast<btCollisionObject*>(proxy0->m_clientObject);
@@ -691,7 +695,7 @@ DynamicWorld::Item DynamicWorld::createObj(btCollisionShape* shape, bool ownShap
   return Item(this,obj.release(),ownShape ? shape : nullptr);
   }
 
-DynamicWorld::Item DynamicWorld::dynamicObj(const Tempest::Matrix4x4& pos, const Bounds& b, phoenix::material_group mat) {
+DynamicWorld::Item DynamicWorld::dynamicObj(const Tempest::Matrix4x4& pos, const Bounds& b, zenkit::MaterialGroup mat) {
   btVector3 hExt = {b.bbox[1].x-b.bbox[0].x, b.bbox[1].y-b.bbox[0].y, b.bbox[1].z-b.bbox[0].z};
   hExt *= 0.01f;
 
@@ -709,7 +713,7 @@ DynamicWorld::BulletBody* DynamicWorld::bulletObj(BulletCallback* cb) {
   return bulletList->add(cb);
   }
 
-DynamicWorld::BBoxBody DynamicWorld::bboxObj(BBoxCallback* cb, const phoenix::bounding_box& bbox) {
+DynamicWorld::BBoxBody DynamicWorld::bboxObj(BBoxCallback* cb, const zenkit::AxisAlignedBoundingBox& bbox) {
   return BBoxBody(this,cb,bbox);
   }
 
@@ -726,7 +730,7 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
 
   struct CallBack:btCollisionWorld::ClosestRayResultCallback {
     using ClosestRayResultCallback::ClosestRayResultCallback;
-    phoenix::material_group  matId = phoenix::material_group::none;
+    zenkit::MaterialGroup matId = zenkit::MaterialGroup::NONE;
 
     bool needsCollision(btBroadphaseProxy* proxy0) const override {
       auto obj=reinterpret_cast<btCollisionObject*>(proxy0->m_clientObject);
@@ -761,13 +765,13 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
 
   world->rayCast(pos, to, callback);
 
-  if(callback.matId != phoenix::material_group::none) {
+  if(callback.matId != zenkit::MaterialGroup::NONE) {
     if(isSpell){
       if(b.cb!=nullptr)
         b.cb->onCollide(callback.matId);
       } else {
-      if(callback.matId==phoenix::material_group::metal ||
-         callback.matId==phoenix::material_group::stone) {
+      if(callback.matId==zenkit::MaterialGroup::METAL ||
+         callback.matId==zenkit::MaterialGroup::STONE) {
         auto d = b.dir;
         btVector3 m = {d.x,d.y,d.z};
         btVector3 n = callback.m_hitNormalWorld;
@@ -823,49 +827,49 @@ void DynamicWorld::deleteObj(BulletBody* obj) {
   bulletList->del(obj);
   }
 
-float DynamicWorld::materialFriction(phoenix::material_group mat) {
+float DynamicWorld::materialFriction(zenkit::MaterialGroup mat) {
   // https://www.thoughtspike.com/friction-coefficients-for-bullet-physics/
   switch(mat) {
-    case phoenix::material_group::undefined:
+    case zenkit::MaterialGroup::UNDEFINED:
       return 0.5f;
-    case phoenix::material_group::metal:
+    case zenkit::MaterialGroup::METAL:
       return 1.1f;
-    case phoenix::material_group::stone:
+    case zenkit::MaterialGroup::STONE:
       return 0.65f;
-    case phoenix::material_group::wood:
+    case zenkit::MaterialGroup::WOOD:
       return 0.4f;
-    case phoenix::material_group::earth:
+    case zenkit::MaterialGroup::EARTH:
       return 0.4f;
-    case phoenix::material_group::water:
+    case zenkit::MaterialGroup::WATER:
       return 0.01f;
-    case phoenix::material_group::snow:
+    case zenkit::MaterialGroup::SNOW:
       return 0.2f;
-    case phoenix::material_group::none:
+    case zenkit::MaterialGroup::NONE:
       break;
     }
   return 0.75f;
   }
 
-float DynamicWorld::materialDensity(phoenix::material_group mat) {
+float DynamicWorld::materialDensity(zenkit::MaterialGroup mat) {
   switch (mat) {
-  case phoenix::material_group::undefined:
-  case phoenix::material_group::none:
-    return 2000.0f;
-  case phoenix::material_group::metal:
-    return 7800.f;
-  case phoenix::material_group::stone:
-    return 2200.f;
-  case phoenix::material_group::wood:
-    return 700.f;
-  case phoenix::material_group::earth:
-    return 1500.f;
-  case phoenix::material_group::water:
-    return 1000.f;
-  case phoenix::material_group::snow:
-    return 1000.f;
-  }
+    case zenkit::MaterialGroup::UNDEFINED:
+    case zenkit::MaterialGroup::NONE:
+      return 2000.0f;
+    case zenkit::MaterialGroup::METAL:
+      return 7800.f;
+    case zenkit::MaterialGroup::STONE:
+      return 2200.f;
+    case zenkit::MaterialGroup::WOOD:
+      return 700.f;
+    case zenkit::MaterialGroup::EARTH:
+      return 1500.f;
+    case zenkit::MaterialGroup::WATER:
+      return 1000.f;
+    case zenkit::MaterialGroup::SNOW:
+      return 1000.f;
+    }
   return 2000.f;
-}
+  }
 
 std::string_view DynamicWorld::validateSectorName(std::string_view name) const {
   return landMesh->validateSectorName(name);
@@ -1098,7 +1102,7 @@ Tempest::Matrix4x4 DynamicWorld::BulletBody::matrix() const {
   return mat;
   }
 
-DynamicWorld::BBoxBody::BBoxBody(DynamicWorld* ow, BBoxCallback* cb, const phoenix::bounding_box& bbox)
+DynamicWorld::BBoxBody::BBoxBody(DynamicWorld* ow, BBoxCallback* cb, const zenkit::AxisAlignedBoundingBox& bbox)
   : owner(ow), cb(cb) {
   btVector3 hExt = CollisionWorld::toMeters(Tempest::Vec3{bbox.max.x-bbox.min.x, bbox.max.y-bbox.min.y, bbox.max.z-bbox.min.z})*0.5f;
   btVector3 pos  = CollisionWorld::toMeters(Tempest::Vec3{bbox.max.x+bbox.min.x, bbox.max.y+bbox.min.y, bbox.max.z+bbox.min.z})*0.5f;

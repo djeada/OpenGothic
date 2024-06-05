@@ -1,4 +1,4 @@
-﻿#include "gamemusic.h"
+#include "gamemusic.h"
 #include "gothic.h"
 
 #include <Tempest/Sound>
@@ -20,7 +20,7 @@ struct GameMusic::MusicProducer : Tempest::SoundProducer {
     }
 
   void updateTheme() {
-    phoenix::c_music_theme  theme;
+    zenkit::IMusicTheme     theme;
     bool                    updateTheme = false;
     bool                    reloadTheme = false;
     Tags                    tags        = Tags::Day;
@@ -71,10 +71,15 @@ struct GameMusic::MusicProducer : Tempest::SoundProducer {
       }
     catch(std::runtime_error&) {
       Log::e("unable to load sound: \"",theme.file,"\"");
+      stopMusic();
+      }
+    catch(std::bad_alloc&) {
+      Log::e("out of memory for sound: \"",theme.file,"\"");
+      stopMusic();
       }
     }
 
-  bool setMusic(const phoenix::c_music_theme &theme, Tags tags){
+  bool setMusic(const zenkit::IMusicTheme &theme, Tags tags){
     std::lock_guard<std::mutex> guard(pendingSync);
     reloadTheme  = pendingMusic.file!=theme.file;
     pendingMusic = theme;
@@ -104,15 +109,15 @@ struct GameMusic::MusicProducer : Tempest::SoundProducer {
     return enable.load();
     }
 
-  Dx8::Mixer                             mix;
+  Dx8::Mixer           mix;
 
-  std::mutex                             pendingSync;
-  std::atomic_bool                       enable{true};
-  bool                                   hasPending=false;
-  bool                                   reloadTheme=false;
-  phoenix::c_music_theme                 pendingMusic;
-  Tags                                   pendingTags=Tags::Day;
-  Tags                                   currentTags=Tags::Day;
+  std::mutex           pendingSync;
+  std::atomic_bool     enable{true};
+  bool                 hasPending=false;
+  bool                 reloadTheme=false;
+  zenkit::IMusicTheme  pendingMusic;
+  Tags                 pendingTags=Tags::Day;
+  Tags                 currentTags=Tags::Day;
   };
 
 struct GameMusic::Impl final {
@@ -125,7 +130,7 @@ struct GameMusic::Impl final {
     sound.play();
     }
 
-  void setMusic(const phoenix::c_music_theme &theme, Tags tags) {
+  void setMusic(const zenkit::IMusicTheme &theme, Tags tags) {
     dxMixer->setMusic(theme,tags);
     }
 
@@ -195,7 +200,7 @@ void GameMusic::setMusic(GameMusic::Music m) {
     setMusic(*theme,GameMusic::mkTags(GameMusic::Std,GameMusic::Day));
   }
 
-void GameMusic::setMusic(const phoenix::c_music_theme &theme, Tags tags) {
+void GameMusic::setMusic(const zenkit::IMusicTheme& theme, Tags tags) {
   impl->setMusic(theme,tags);
   }
 

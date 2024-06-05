@@ -3,7 +3,7 @@
 #include <vector>
 #include <memory>
 
-#include <phoenix/vobs/misc.hh>
+#include <zenkit/vobs/Misc.hh>
 
 #include "bullet.h"
 #include "spaceindex.h"
@@ -20,6 +20,7 @@ class World;
 class Serialize;
 class TriggerEvent;
 class AbstractTrigger;
+class CsCamera;
 class CollisionZone;
 
 class WorldObjects final {
@@ -59,7 +60,8 @@ class WorldObjects final {
 
     bool           isTargeted(Npc& npc);
     Npc*           findHero();
-    Npc*           findNpcByInstance(size_t instance);
+    Npc*           findNpcByInstance(size_t instance, size_t n = 0);
+    Item*          findItemByInstance(size_t instance, size_t n = 0);
     void           detectNpcNear(const std::function<void(Npc&)>& f);
     void           detectNpc (const float x, const float y, const float z, const float r, const std::function<void(Npc&)>&  f);
     void           detectItem(const float x, const float y, const float z, const float r, const std::function<void(Item&)>& f);
@@ -77,9 +79,13 @@ class WorldObjects final {
     Interactive&   mobsi(size_t i)       { return **(interactiveObj.begin()+i); }
     uint32_t       mobsiId(const void* ptr) const;
 
+    void           setCurrentCs(CsCamera* cs);
+    CsCamera*      currentCs() const;
+
     void           addTrigger(AbstractTrigger* trigger);
     void           triggerEvent(const TriggerEvent& e);
     bool           triggerOnStart(bool firstTime);
+    void           execDelayedEvents();
     bool           execTriggerEvent(const TriggerEvent& e);
     void           enableTicks (AbstractTrigger& t);
     void           disableTicks(AbstractTrigger& t);
@@ -90,7 +96,7 @@ class WorldObjects final {
     void           stopEffect(const VisualFx& vfx);
 
     Item*          addItem   (size_t itemInstance, std::string_view at);
-    Item*          addItem   (const phoenix::vobs::item &vob);
+    Item*          addItem   (const zenkit::VItem &vob);
     Item*          addItem   (size_t itemInstance, const Tempest::Vec3& pos);
     Item*          addItem   (size_t itemInstance, const Tempest::Vec3& pos, const Tempest::Vec3& dir);
     Item*          addItemDyn(size_t itemInstance, const Tempest::Matrix4x4& pos, size_t owner);
@@ -103,7 +109,7 @@ class WorldObjects final {
 
     void           addInteractive(Interactive*         obj);
     void           addStatic     (StaticObj*           obj);
-    void           addRoot       (const std::unique_ptr<phoenix::vob>& vob, bool startup);
+    void           addRoot       (const std::shared_ptr<zenkit::VirtualObject>& vob, bool startup);
     void           invalidateVobIndex();
 
     Interactive*   validateInteractive(Interactive *def);
@@ -121,8 +127,9 @@ class WorldObjects final {
     Interactive*   availableMob(const Npc& pl, std::string_view name);
     void           setMobRoutine(gtime time, std::string_view scheme, int32_t state);
 
-    void           sendPassivePerc(Npc& self,Npc& other,Npc& victum,int32_t perc);
-    void           sendPassivePerc(Npc& self,Npc& other,Npc& victum,Item& itm,int32_t perc);
+    void           sendPassivePerc  (Npc& self, Npc& other, Npc& victum, Item* itm, int32_t perc);
+    void           sendImmediatePerc(Npc& self, Npc& other, Npc& victum, Item* itm, int32_t perc);
+
     void           resetPositionToTA();
 
   private:
@@ -165,10 +172,11 @@ class WorldObjects final {
     std::vector<Npc*>                  npcNear;
 
     std::vector<AbstractTrigger*>      triggers;
-    std::vector<AbstractTrigger*>      triggersZn;
     std::vector<AbstractTrigger*>      triggersTk;
+    std::vector<AbstractTrigger*>      triggersDef;
     std::vector<PerceptionMsg>         sndPerc;
     std::vector<TriggerEvent>          triggerEvents;
+    CsCamera*                          currentCsCamera = nullptr;
 
     template<class T>
     auto findObj(T &src, const Npc &pl, const SearchOpt& opt) -> typename std::remove_reference<decltype(src[0])>::type;
@@ -179,6 +187,7 @@ class WorldObjects final {
     bool testObj(T &src, const Npc &pl, const SearchOpt& opt, float& rlen);
 
     void             setMobState(std::string_view scheme, int32_t st);
+    void             passivePerceptionProcess(PerceptionMsg& msg, Npc& npc, Npc& pl);
 
     void             tickNear(uint64_t dt);
     void             tickTriggers(uint64_t dt);

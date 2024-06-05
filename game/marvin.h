@@ -1,8 +1,9 @@
 #pragma once
 
+#include <Tempest/Vec>
+#include <Tempest/Signal>
 #include <string>
 #include <vector>
-#include <Tempest/Vec>
 #include "world/world.h"
 
 class Marvin {
@@ -38,14 +39,20 @@ class Marvin {
       C_ToggleCamDebug,
       C_ToggleCamera,
       C_ToggleInertia,
+      C_ZToggleTimeDemo,
 
       C_AiGoTo,
       C_GoToPos,
+      C_GoToVob,
       C_GoToWayPoint,
+      C_GoToCamera,
 
       C_SetTime,
 
       C_Insert,
+
+      // opengothic specific
+      C_ToggleGI,
       };
 
     struct Cmd {
@@ -72,6 +79,7 @@ class Marvin {
     bool   addItemOrNpcBySymbolName(World* world, std::string_view name, const Tempest::Vec3& at);
     bool   printVariable           (World* world, std::string_view name);
     bool   setTime                 (World& world, std::string_view hh, std::string_view mm);
+    bool   goToVob                 (World& world, Npc& player, Camera& c, std::string_view name, size_t n);
 
     std::vector<Cmd> cmd;
   };

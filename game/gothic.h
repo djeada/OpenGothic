@@ -7,13 +7,14 @@
 #include <Tempest/Signal>
 #include <Tempest/Dir>
 
-#include <phoenix/vm.hh>
+#include <zenkit/DaedalusVm.hh>
 
 #include "game/gamesession.h"
 #include "world/world.h"
 #include "ui/documentmenu.h"
 #include "ui/chapterscreen.h"
 #include "utils/versioninfo.h"
+#include "sound/soundfx.h"
 
 class VersionInfo;
 class CameraDefinitions;
@@ -38,6 +39,26 @@ class Gothic final {
       Finalize   = 3,
       FailedLoad = 4,
       FailedSave = 5
+      };
+
+    struct Options {
+      bool     doRayQuery        = false;
+      bool     doRtGi            = false;
+      bool     doMeshShading     = false;
+      bool     doBindless        = false;
+
+      uint32_t fxaaPreset        = 0;
+
+      bool     hideFocus         = false;
+      float    cameraFov         = 67.5f;
+      float    interfaceScale    = 1;
+      int      inventoryCellSize = 70;
+
+      Tempest::Size saveGameImageSize = {0, 0};
+
+      bool     showHealthBar     = true;
+      uint8_t  showManaBar       = 2;
+      uint8_t  showSwimBar       = 1;
       };
 
     auto         version() const -> const VersionInfo&;
@@ -89,21 +110,21 @@ class Gothic final {
     bool         isMarvinEnabled() const;
     void         setMarvinEnabled(bool m);
 
+    static auto  options() -> const Options&;
+
     bool         isGodMode() const { return godMode; }
     void         setGodMode(bool g) { godMode = g; }
 
     void         toggleDesktop() { desktop = !desktop; }
     bool         isDesktop() { return desktop; }
 
-    bool         doHideFocus () const { return hideFocus; }
     bool         doFrate() const { return showFpsCounter; }
     void         setFRate(bool f) { showFpsCounter = f; }
 
     bool         doClock() const { return showTime; }
     void         setClock(bool t) { showTime = t; }
 
-    bool         doRayQuery() const;
-    bool         doMeshShading() const;
+    Tempest::Signal<void()> toggleGi;
 
     LoadState    checkLoading() const;
     bool         finishLoading();
@@ -147,10 +168,10 @@ class Gothic final {
     std::string_view                      messageByName (std::string_view id) const;
     uint32_t                              messageTime   (std::string_view id) const;
 
-    std::u16string                        nestedPath(const std::initializer_list<const char16_t*> &name, Tempest::Dir::FileType type) const;
-    std::unique_ptr<phoenix::vm>          createPhoenixVm(std::string_view datFile);
-    phoenix::script                       loadScript(std::string_view datFile);
-    void                                  setupVmCommonApi(phoenix::vm &vm);
+    static std::u16string                 nestedPath(const std::initializer_list<const char16_t*> &name, Tempest::Dir::FileType type);
+    std::unique_ptr<zenkit::DaedalusVm>   createPhoenixVm(std::string_view datFile, const ScriptLang lang = ScriptLang::NONE);
+    zenkit::DaedalusScript                loadScript(std::string_view datFile, const ScriptLang lang);
+    void                                  setupVmCommonApi(zenkit::DaedalusVm &vm);
 
     static const FightAi&                 fai();
     static const SoundDefinitions&        sfx();
@@ -168,6 +189,7 @@ class Gothic final {
 
   private:
     VersionInfo                             vinfo;
+    Options                                 opts;
     std::mt19937                            randGen;
     uint16_t                                pauseSum=0;
     bool                                    isMarvin       = false;
@@ -175,8 +197,7 @@ class Gothic final {
     bool                                    desktop        = false;
     bool                                    showFpsCounter = false;
     bool                                    showTime       = false;
-    bool                                    hideFocus      = false;
-    bool                                    isMeshSh       = false;
+
     std::string                             wrldDef, plDef, gameDatDef, ouDef;
 
     std::unique_ptr<IniFile>                defaults;

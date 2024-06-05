@@ -2,8 +2,8 @@
 
 #include <Tempest/Widget>
 
-#include <phoenix/vm.hh>
-#include <phoenix/ext/daedalus_classes.hh>
+#include <zenkit/DaedalusVm.hh>
+#include <zenkit/addon/daedalus.hh>
 
 #include "utils/keycodec.h"
 
@@ -37,7 +37,11 @@ class MenuRoot : public Tempest::Widget {
     void mouseUpEvent   (Tempest::MouseEvent& event) override;
 
   private:
-    std::unique_ptr<phoenix::vm>  vm;
+    void initSettings();
+
+    std::unique_ptr<zenkit::DaedalusVm>    vm;
+    int32_t                                vmLang = -1;
+
     GameMenu*                              current=nullptr;
     std::vector<std::unique_ptr<GameMenu>> menuStack;
     KeyCodec&                              keyCodec;

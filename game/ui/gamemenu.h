@@ -5,8 +5,8 @@
 #include <Tempest/Timer>
 #include <Tempest/Color>
 
-#include <phoenix/vm.hh>
-#include <phoenix/ext/daedalus_classes.hh>
+#include <zenkit/DaedalusVm.hh>
+#include <zenkit/addon/daedalus.hh>
 
 #include <memory>
 
@@ -21,14 +21,13 @@ class GthFont;
 
 class GameMenu : public Tempest::Widget {
   public:
-    GameMenu(MenuRoot& owner, KeyCodec& keyCodec, phoenix::vm& vm, std::string_view menuSection, KeyCodec::Action keyClose);
+    GameMenu(MenuRoot& owner, KeyCodec& keyCodec, zenkit::DaedalusVm& vm, std::string_view menuSection, KeyCodec::Action keyClose);
     ~GameMenu() override;
+    void resetVm(zenkit::DaedalusVm* vm);
 
     void setPlayer(const Npc& pl);
 
-    void onMove (int dy);
-    void onSlide(int dx);
-    void onSelect();
+    void onKeyboard(KeyCodec::Action k);
     void onTick();
     void processMusicTheme();
 
@@ -51,30 +50,30 @@ class GameMenu : public Tempest::Widget {
     struct KeyEditDialog;
     struct SavNameDialog;
     struct Item {
-      std::string                           name;
-      std::shared_ptr<phoenix::c_menu_item> handle={};
-      const Tempest::Texture2d*             img=nullptr;
-      SaveGameHeader                        savHdr;
-      Tempest::Pixmap                       savPriview;
-      int32_t                               value   = 0;
-      int32_t                               scroll  = 0;
-      bool                                  visible = true;
+      std::string                         name;
+      std::shared_ptr<zenkit::IMenuItem>  handle={};
+      const Tempest::Texture2d*           img=nullptr;
+      SaveGameHeader                      savHdr;
+      Tempest::Pixmap                     savPriview;
+      int32_t                             value   = 0;
+      int32_t                             scroll  = 0;
+      bool                                visible = true;
       };
 
     MenuRoot&                             owner;
     KeyCodec&                             keyCodec;
-    phoenix::vm&                vm;
+    zenkit::DaedalusVm*                   vm = nullptr;
     Tempest::Timer                        timer;
     const Tempest::Texture2d*             up   = nullptr;
     const Tempest::Texture2d*             down = nullptr;
 
-    std::shared_ptr<phoenix::c_menu> menu={};
+    std::shared_ptr<zenkit::IMenu>        menu={};
     const Tempest::Texture2d*             back=nullptr;
     const Tempest::Texture2d*             slider=nullptr;
     Tempest::Texture2d                    savThumb;
     std::vector<char>                     textBuf;
 
-    Item                                  hItems[phoenix::c_menu::item_count];
+    Item                                  hItems[zenkit::IMenu::item_count];
     Item*                                 ctrlInput = nullptr;
     uint32_t                              curItem=0;
     bool                                  exitFlag=false;
@@ -94,16 +93,18 @@ class GameMenu : public Tempest::Widget {
     void                                  initItems();
     void                                  getText(const Item &it, std::vector<char>& out);
     const GthFont&                        getTextFont(const Item &it);
-    static bool                           isSelectable(const std::shared_ptr<phoenix::c_menu_item>& item);
-    static bool                           isEnabled(const std::shared_ptr<phoenix::c_menu_item>& item);
-    static bool                           isHidden(const std::shared_ptr<phoenix::c_menu_item>& item);
 
-    void                                  exec         (Item &item, int slideDx);
-    void                                  execSingle   (Item &it,   int slideDx);
+    static bool                           isSelectable(const std::shared_ptr<zenkit::IMenuItem>& item);
+    static bool                           isHorSelectable(const std::shared_ptr<zenkit::IMenuItem>& item);
+    static bool                           isEnabled(const std::shared_ptr<zenkit::IMenuItem>& item);
+    static bool                           isHidden(const std::shared_ptr<zenkit::IMenuItem>& item);
+
+    void                                  exec         (Item &item, int slideDx, KeyCodec::Action hint);
+    void                                  execSingle   (Item &it,   int slideDx, KeyCodec::Action hint);
     void                                  execChgOption(Item &item, int slideDx);
     void                                  execSaveGame (const Item& item);
     void                                  execLoadGame (const Item& item);
-    void                                  execCommands (std::string str, bool isClick);
+    void                                  execCommands (std::string str, bool isClick, KeyCodec::Action hint);
 
     bool                                  implUpdateSavThumb(Item& sel);
     size_t                                saveSlotId(const Item& sel);

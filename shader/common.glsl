@@ -13,10 +13,9 @@ const float IorWater = 1.0 / 1.52; // air / water
 const float IorAir   = 1.52;       // water /air
 const vec3  WaterAlbedo = vec3(0.8,0.9,1.0);
 
-const vec3  GGroundAlbedo = vec3(0.1);
-
-// devide photo-color by assumed sun intesity. Should be 1/scene.GSunIntensityMax
-const float PhotoLumInv   = 0.2;
+const vec3  GGroundAlbedo = vec3(0.3);
+const float Fd_Lambert    = (1.0/M_PI);
+const float Fd_LambertInv = (M_PI);
 
 float linearDepth(float d, vec3 clipInfo) {
   // z_n * z_f,  z_n - z_f, z_f
@@ -142,6 +141,94 @@ vec3 textureSkyLUT(in sampler2D skyLUT, const vec3 viewPos, vec3 rayDir, vec3 su
   float v  = 0.5 + 0.5*sign(altitudeAngle)*sqrt(abs(altitudeAngle)*2.0/M_PI);
   vec2  uv = vec2(azimuthAngle / (2.0*M_PI), v);
   return textureLod(skyLUT, uv, 0).rgb;
+  }
+
+// Sample i-th point from Hammersley point set of NumSamples points total.
+// See: http://holger.dammertz.org/stuff/notes_HammersleyOnHemisphere.html
+vec2 sampleHammersley(uint i, uint numSamples) {
+  uint  bits = bitfieldReverse(i);
+  float vdc  = float(bits) * 2.3283064365386963e-10; // / 0x100000000
+  return vec2(float(i)/float(numSamples), vdc);
+  }
+
+// Uniform sampling
+vec3 sampleHemisphere(uint i, uint numSamples, float offsetAng) {
+  const vec2  xi  = sampleHammersley(i,numSamples);
+  const float u   = 1-xi.x;
+  const float u1p = sqrt(1.0 - u*u);
+  const float a   = M_PI*2.0*xi.y + offsetAng;
+  return vec3(cos(a) * u1p, xi.x, sin(a) * u1p);
+  }
+
+// Cosine sampling
+vec3 sampleHemisphereCos(uint i, uint numSamples, float offsetAng) {
+  const vec2  xi  = sampleHammersley(i,numSamples);
+  const float u   = sqrt(1 - xi.x);
+  const float u1p = sqrt(1 - u*u);
+  const float a   = M_PI*2.0*xi.y + offsetAng;
+  return vec3(cos(a) * u1p, xi.x, sin(a) * u1p);
+  }
+
+vec3 sampleSphere(uint i, uint numSamples, float offsetAng) {
+  // fibonacci_lattice
+  const float PHI = 0.5*(sqrt(5.0) + 1.0);
+  vec2 xy = vec2((float(i)+0.5)/float(numSamples), mod(float(i)/PHI, 1.0));
+
+  vec2 pt = vec2(2.0*M_PI*xy.y, acos(2.0*xy.x - 1.) - M_PI*0.5);
+  return vec3(cos(pt.x)*cos(pt.y), sin(pt.x)*cos(pt.y), sin(pt.y));
+  }
+
+vec3 projectiveUnproject(in mat4 projectiveInv, in vec3 pos) {
+  vec4 o;
+  o.x = pos.x * projectiveInv[0][0];
+  o.y = pos.y * projectiveInv[1][1];
+  o.z = pos.z * projectiveInv[2][2] + projectiveInv[3][2];
+  o.w = pos.z * projectiveInv[2][3] + projectiveInv[3][3];
+  return o.xyz/o.w;
+  }
+
+vec3 projectiveProject(in mat4 projective, in vec3 pos) {
+  vec4 o;
+  o.x = pos.x * projective[0][0];
+  o.y = pos.y * projective[1][1];
+  o.z = pos.z * projective[2][2] + projective[3][2];
+  o.w = pos.z * projective[2][3] + projective[3][3];
+  return o.xyz/o.w;
+  }
+
+vec2 msign( vec2 v ) {
+  return vec2( (v.x>=0.0) ? 1.0 : -1.0,
+               (v.y>=0.0) ? 1.0 : -1.0 );
+  }
+
+// https://www.shadertoy.com/view/llfcRl
+uint octahedral_32( in vec3 nor ) {
+  nor.xy /= (abs(nor.x) + abs(nor.y) + abs(nor.z));
+  nor.xy  = (nor.z >= 0.0) ? (nor.xy) : (1.0-abs(nor.yx))*msign(nor.xy);
+  return packSnorm2x16(nor.xy);
+  }
+
+vec3 i_octahedral_32( uint data ) {
+  // Rune Stubbe's version
+  vec2 v   = unpackSnorm2x16(data);
+  vec3 nor = vec3(v, 1.0 - abs(v.x) - abs(v.y));
+  float t = max(-nor.z, 0.0);
+  nor.x += (nor.x>0.0) ? -t : t;
+  nor.y += (nor.y>0.0) ? -t : t;
+  return normalize(nor);
+  }
+
+uint encodeNormal(vec3 n) {
+  return octahedral_32(n);
+  }
+
+vec3 decodeNormal(uint n) {
+  return i_octahedral_32(n);
+  }
+
+vec3 normalFetch(in usampler2D gbufNormal, ivec2 p) {
+  const uint n = texelFetch(gbufNormal, p, 0).r;
+  return decodeNormal(n);
   }
 
 #endif

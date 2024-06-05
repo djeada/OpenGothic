@@ -14,6 +14,7 @@
 #include "world/objects/item.h"
 #include "world/objects/interactive.h"
 #include "world/triggers/abstracttrigger.h"
+#include "world/triggers/cscamera.h"
 #include "game/globaleffects.h"
 #include "game/serialize.h"
 #include "utils/string_frm.h"
@@ -41,22 +42,22 @@ const char* materialTag(ItemMaterial src) {
   return "UD";
   }
 
-const char* materialTag(phoenix::material_group src) {
+const char* materialTag(zenkit::MaterialGroup src) {
   switch(src) {
-    case phoenix::material_group::undefined:
-    case phoenix::material_group::none:
+    case zenkit::MaterialGroup::UNDEFINED:
+    case zenkit::MaterialGroup::NONE:
       return "UD";
-    case phoenix::material_group::metal:
+    case zenkit::MaterialGroup::METAL:
       return "ME";
-    case phoenix::material_group::stone:
+    case zenkit::MaterialGroup::STONE:
       return "ST";
-    case phoenix::material_group::wood:
+    case zenkit::MaterialGroup::WOOD:
       return "WO";
-    case phoenix::material_group::earth:
+    case zenkit::MaterialGroup::EARTH:
       return "EA";
-    case phoenix::material_group::water:
+    case zenkit::MaterialGroup::WATER:
       return "WA";
-    case phoenix::material_group::snow:
+    case zenkit::MaterialGroup::SNOW:
       return "SA"; // sand?
     }
   return "UD";
@@ -72,9 +73,9 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
     }
 
   try {
-    auto buf = entry->open();
-    auto world = phoenix::world::parse(buf, version().game == 1 ? phoenix::game_version::gothic_1
-                                                                : phoenix::game_version::gothic_2);
+    auto buf   = entry->open();
+    auto world = zenkit::World::parse(buf, version().game == 1 ? zenkit::GameVersion::GOTHIC_1
+                                                               : zenkit::GameVersion::GOTHIC_2);
     loadProgress(20);
     auto& worldMesh = world.world_mesh;
 
@@ -95,7 +96,7 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
       bsp.sectors           = std::move(world.world_bsp_tree.sectors);
       bsp.leaf_node_indices = std::move(world.world_bsp_tree.leaf_node_indices);
       bsp.sectorsData.resize(bsp.sectors.size());
-      world.world_bsp_tree = phoenix::bsp_tree();
+      world.world_bsp_tree  = zenkit::BspTree();
     }
     loadProgress(50);
 
@@ -144,9 +145,9 @@ void World::setPlayer(Npc* npc) {
   if(npc==nullptr)
     return;
   npcPlayer->setProcessPolicy(Npc::ProcessPolicy::AiNormal);
-  if (!npcPlayer->isDead()) {
+  if(!npcPlayer->isDead()) {
     npcPlayer->resumeAiRoutine();
-  }
+    }
   
   npc->setProcessPolicy(Npc::ProcessPolicy::Player);
   npc->clearState(true);
@@ -254,7 +255,7 @@ MeshObjects::Mesh World::addView(std::string_view visual, int32_t headTex, int32
   return view()->addView(visual,headTex,teetTex,bodyColor);
   }
 
-MeshObjects::Mesh World::addView(const phoenix::c_item& itm) {
+MeshObjects::Mesh World::addView(const zenkit::IItem& itm) {
   return view()->addView(itm.visual,itm.material,0,itm.material);
   }
 
@@ -274,7 +275,7 @@ MeshObjects::Mesh World::addStaticView(std::string_view visual) {
   return view()->addStaticView(visual);
   }
 
-MeshObjects::Mesh World::addDecalView(const phoenix::vob& vob) {
+MeshObjects::Mesh World::addDecalView(const zenkit::VirtualObject& vob) {
   return view()->addDecalView(vob);
   }
 
@@ -290,8 +291,12 @@ std::unique_ptr<Npc> World::takeHero() {
   return wobj.takeNpc(npcPlayer);
   }
 
-Npc *World::findNpcByInstance(size_t instance) {
-  return wobj.findNpcByInstance(instance);
+Item* World::findItemByInstance(size_t instance, size_t n) {
+  return wobj.findItemByInstance(instance,n);
+  }
+
+Npc *World::findNpcByInstance(size_t instance, size_t n) {
+  return wobj.findNpcByInstance(instance,n);
   }
 
 std::string_view World::roomAt(const Tempest::Vec3& p) {
@@ -319,7 +324,7 @@ std::string_view World::roomAt(const Tempest::Vec3& p) {
   return "";
   }
 
-std::string_view World::roomAt(const phoenix::bsp_node& node) {
+std::string_view World::roomAt(const zenkit::BspNode& node) {
   const std::string* ret=nullptr;
   size_t       count=0;
   auto         id = &node-bsp.nodes.data();(void)id;
@@ -493,8 +498,9 @@ void World::execTriggerEvent(const TriggerEvent& e) {
   if(!emitted) {
     if(e.target=="EVT_LEFT_ROOM_01_TRAP_MOVER_FOR_DMG_MASTER" ||
        e.target=="EVT_LEFT_UP_01_TOGGLE_TRIGGER_01" ||
-       e.target=="EVT_RIGHT_ROOM_01_SPAWN_ROT_02_SOUND")
-      return; // known problem on dragonisland.zen, skop for now
+       e.target=="EVT_RIGHT_ROOM_01_SPAWN_ROT_02_SOUND" ||
+       e.target=="NULL")
+      return; // known problem on dragonisland.zen, skip for now
     Tempest::Log::d("unable to process trigger: \"",e.target,"\"");
     }
   }
@@ -505,6 +511,20 @@ void World::enableTicks(AbstractTrigger& t) {
 
 void World::disableTicks(AbstractTrigger& t) {
   wobj.disableTicks(t);
+  }
+
+void World::setCurrentCs(CsCamera* cs) {
+  wobj.setCurrentCs(cs);
+  }
+
+CsCamera* World::currentCs() const {
+  return wobj.currentCs();
+  }
+
+bool World::isCutsceneLock() const {
+  if(auto cs = wobj.currentCs())
+    return !cs->isPlayerMovable();
+  return false;
   }
 
 void World::enableCollizionZone(CollisionZone& z) {
@@ -566,7 +586,7 @@ Item *World::addItem(size_t itemInstance, std::string_view at) {
   return wobj.addItem(itemInstance,at);
   }
 
-Item* World::addItem(const phoenix::vobs::item& vob) {
+Item* World::addItem(const zenkit::VItem& vob) {
   return wobj.addItem(vob);
   }
 
@@ -651,11 +671,19 @@ Bullet& World::shootBullet(const Item &itm, const Npc &npc, const Npc *target, c
   }
 
 void World::sendPassivePerc(Npc &self, Npc &other, Npc &victum, int32_t perc) {
-  wobj.sendPassivePerc(self,other,victum,perc);
+  wobj.sendPassivePerc(self,other,victum,nullptr,perc);
   }
 
-void World::sendPassivePerc(Npc &self, Npc &other, Npc &victum, Item &item, int32_t perc) {
-  wobj.sendPassivePerc(self,other,victum,item,perc);
+void World::sendPassivePerc(Npc &self, Npc &other, Npc &victum, Item& item, int32_t perc) {
+  wobj.sendPassivePerc(self,other,victum,&item,perc);
+  }
+
+void World::sendImmediatePerc(Npc& self, Npc& other, Npc& victum, int32_t perc) {
+  wobj.sendImmediatePerc(self,other,victum,nullptr,perc);
+  }
+
+void World::sendImmediatePerc(Npc& self, Npc& other, Npc& victum, Item& item, int32_t perc) {
+  wobj.sendImmediatePerc(self,other,victum,&item,perc);
   }
 
 Sound World::addWeaponHitEffect(Npc& src, const Bullet* srcArrow, Npc& reciver) {
@@ -689,7 +717,7 @@ Sound World::addWeaponHitEffect(Npc& src, const Bullet* srcArrow, Npc& reciver) 
     return addHitEffect("FI",armor,"MAM",pos);
   }
 
-Sound World::addLandHitEffect(ItemMaterial src, phoenix::material_group reciver, const Tempest::Matrix4x4& pos) {
+Sound World::addLandHitEffect(ItemMaterial src, zenkit::MaterialGroup reciver, const Tempest::Matrix4x4& pos) {
   // IHI - item hits item
   // IHL - Item hits Level
   return addHitEffect(materialTag(src),materialTag(reciver),"IHL",pos);
@@ -757,15 +785,15 @@ void World::addFreePoint(const Tempest::Vec3& pos, const Tempest::Vec3& dir, std
   wmatrix->addFreePoint(pos,dir,name);
   }
 
-void World::addSound(const phoenix::vob& vob) {
-  if(vob.type==phoenix::vob_type::zCVobSound || vob.type==phoenix::vob_type::zCVobSoundDaytime) {
-    wsound.addSound(reinterpret_cast<const phoenix::vobs::sound&>(vob));
+void World::addSound(const zenkit::VirtualObject& vob) {
+  if(vob.type==zenkit::VirtualObjectType::zCVobSound || vob.type==zenkit::VirtualObjectType::zCVobSoundDaytime) {
+    wsound.addSound(reinterpret_cast<const zenkit::VSound&>(vob));
     }
-  else if(vob.type==phoenix::vob_type::oCZoneMusic) {
-    wsound.addZone(reinterpret_cast<const phoenix::vobs::zone_music&>(vob));
+  else if(vob.type==zenkit::VirtualObjectType::oCZoneMusic) {
+    wsound.addZone(reinterpret_cast<const zenkit::VZoneMusic&>(vob));
     }
-  else if(vob.type==phoenix::vob_type::oCZoneMusicDefault) {
-    wsound.setDefaultZone(reinterpret_cast<const phoenix::vobs::zone_music&>(vob));
+  else if(vob.type==zenkit::VirtualObjectType::oCZoneMusicDefault) {
+    wsound.setDefaultZone(reinterpret_cast<const zenkit::VZoneMusicDefault&>(vob));
     }
   }
 
@@ -773,7 +801,7 @@ void World::invalidateVobIndex() {
   wobj.invalidateVobIndex();
   }
 
-const phoenix::c_focus& World::searchPolicy(const Npc& pl, TargetCollect& coll, WorldObjects::SearchFlg& opt) const {
+const zenkit::IFocus& World::searchPolicy(const Npc& pl, TargetCollect& coll, WorldObjects::SearchFlg& opt) const {
   opt  = WorldObjects::NoFlg;
   coll = TARGET_COLLECT_FOCUS;
 
@@ -830,7 +858,7 @@ const WayPoint *World::findFreePoint(const Npc &npc, std::string_view name) cons
   return wmatrix->findFreePoint(pos,name,[&npc](const WayPoint& wp) -> bool {
     if(wp.isLocked())
       return false;
-    if(!npc.canSeeNpc(wp.x,wp.y+10,wp.z,true))
+    if(!npc.canRayHitPoint(Tempest::Vec3(wp.x,wp.y+10,wp.z),true))
       return false;
     return true;
     });
@@ -853,7 +881,7 @@ const WayPoint *World::findNextFreePoint(const Npc &npc, std::string_view name) 
   auto wp  = wmatrix->findFreePoint(pos,name,[cur,&npc](const WayPoint& wp) -> bool {
     if(wp.isLocked() || &wp==cur)
       return false;
-    if(!npc.canSeeNpc(wp.x,wp.y+10,wp.z,true))
+    if(!npc.canRayHitPoint(Tempest::Vec3(wp.x,wp.y+10,wp.z),true))
       return false;
     return true;
     });
@@ -895,7 +923,7 @@ WayPath World::wayTo(const Npc &npc, const WayPoint &end) const {
     return wmatrix->wayTo(&begin,1,p,end);
     }
   auto near = wmatrix->findWayPoint(p, [&npc](const WayPoint &wp) {
-    if(!npc.canSeeNpc(wp.x,wp.y+10,wp.z,true))
+    if(!npc.canRayHitPoint(Tempest::Vec3(wp.x,wp.y+10,wp.z),true))
       return false;
     return true;
     });
@@ -909,7 +937,7 @@ WayPath World::wayTo(const Npc &npc, const WayPoint &end) const {
   wpoint.push_back(near);
   for(auto& i:near->connections()) {
     auto p = i.point->position();
-    if(npc.canSeeNpc(p.x,p.y+10,p.z,true))
+    if(npc.canRayHitPoint(Tempest::Vec3(p.x,p.y+10,p.z)))
       wpoint.push_back(i.point);
     }
 

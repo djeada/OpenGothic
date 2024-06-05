@@ -8,13 +8,13 @@ set(CPP    "${CMAKE_CURRENT_BINARY_DIR}/sprv/shader.cpp")
 file(WRITE ${HEADER}
   "#include <cstdint>\n"
   "#include <string_view>\n"
+  "#include <string>\n"
   "#include <stdexcept>\n"
   "\n"
   "struct GothicShader {\n"
   "  const char* data;\n"
   "  size_t      len;\n"
 )
-
 
 foreach(i ${SOURCES})
   get_filename_component(NAME ${i} NAME)
@@ -31,7 +31,7 @@ foreach(i ${SOURCES})
   file(APPEND ${HEADER} "  if(\"${NAME}\"==name)\n")
   file(APPEND ${HEADER} "    return ${CLEAN_NAME};\n")
 endforeach()
-file(APPEND ${HEADER} "  throw std::runtime_error(\"\");\n")
+file(APPEND ${HEADER} "  throw std::runtime_error(\"shader not found: \"+std::string(name));\n")
 file(APPEND ${HEADER} "  }\n")
 
 file(WRITE ${CPP}
@@ -44,7 +44,7 @@ foreach(i ${SOURCES})
   string(LENGTH ${SHADER_SPRV} SHADER_SPRV_LEN)
   string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," SHADER_SPRV ${SHADER_SPRV})
 
-  file(APPEND ${CPP} "static const uint8_t SRC_${CLEAN_NAME}[] = {${SHADER_SPRV}};\n")
+  file(APPEND ${CPP} "alignas(uint32_t) static const uint8_t SRC_${CLEAN_NAME}[] = {${SHADER_SPRV}};\n")
 endforeach()
 file(APPEND ${CPP} "\n")
 

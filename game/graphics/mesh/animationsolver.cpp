@@ -145,7 +145,7 @@ const Animation::Sequence* AnimationSolver::implSolveAnim(AnimationSolver::Anim 
     }
   else if(st==WeaponState::Bow || st==WeaponState::CBow) {
     // S_BOWAIM -> S_BOWSHOOT+T_BOWRELOAD -> S_BOWAIM
-    if(a==Anim::AimBow) {
+    if(a==AimBow) {
       auto bs = pose.bodyState();
       if(bs==BS_HIT)
         return solveFrm("T_%sRELOAD",st);
@@ -153,14 +153,14 @@ const Animation::Sequence* AnimationSolver::implSolveAnim(AnimationSolver::Anim 
         return solveFrm("S_%sAIM",st);
       return solveFrm("S_%sRUN",st);
       }
-    if(a==Anim::Attack) {
+    if(a==Attack) {
       auto bs = pose.bodyState();
       if(bs==BS_AIMNEAR || bs==BS_AIMFAR)
         return solveFrm("S_%sSHOOT",st);
       }
     }
 
-  if(a==Anim::MagNoMana)
+  if(a==MagNoMana)
     return solveFrm("T_CASTFAIL");
   // Move
   if(a==Idle) {
@@ -227,7 +227,7 @@ const Animation::Sequence* AnimationSolver::implSolveAnim(AnimationSolver::Anim 
       return solveFrm("T_%sWALKWSTRAFER",st);
     return solveFrm("T_%sRUNSTRAFER",st);
     }
-  if(a==Anim::MoveBack) {
+  if(a==MoveBack) {
     const Animation::Sequence* s = nullptr;
     if(bool(wlkMode & WalkBit::WM_Dive))
       s = solveFrm("S_DIVE");
@@ -280,7 +280,7 @@ const Animation::Sequence* AnimationSolver::implSolveAnim(AnimationSolver::Anim 
     return solveFrm("S_JUMPUP");
 
   if(a==JumpHang) {
-    if(pose.bodyState()==BS_JUMP)  {
+    if(pose.bodyState()==BS_JUMP) {
       if(auto ret = solveFrm("T_JUMPUP_2_HANG"))
         return ret;
       }
@@ -288,12 +288,31 @@ const Animation::Sequence* AnimationSolver::implSolveAnim(AnimationSolver::Anim 
     return solveFrm("T_HANG_2_STAND");
     }
 
-  if(a==Anim::Fallen)
-    return solveFrm("S_FALLEN"); //TODO: S_FALLENB
   if(a==Anim::Fall)
     return solveFrm("S_FALLDN");
-  if(a==Anim::FallDeep)
+
+  if(a==Anim::Fallen) {
+    if(pose.isInAnim("S_FALL") || pose.isInAnim("S_FALLEN"))
+      return solveFrm("S_FALLEN");
+    if(pose.isInAnim("S_FALLB") || pose.isInAnim("S_FALLENB"))
+      return solveFrm("S_FALLENB");
+    return solveFrm("S_FALLEN");
+    }
+  if(a==Anim::FallenA)
+    return solveFrm("S_FALLEN");
+  if(a==Anim::FallenB)
+    return solveFrm("S_FALLENB");
+
+  if(a==Anim::FallDeep) {
+    if(pose.bodyState()==BS_FALL || pose.bodyState()==BS_JUMP)
+      return solveFrm("S_FALL");
+    return solveFrm("S_FALLB");
+    }
+  if(a==Anim::FallDeepA)
     return solveFrm("S_FALL");
+  if(a==Anim::FallDeepB)
+    return solveFrm("S_FALLB");
+
   if(a==Anim::SlideA)
     return solveFrm("S_SLIDE");
   if(a==Anim::SlideB)
@@ -356,6 +375,26 @@ const Animation::Sequence *AnimationSolver::solveAnim(WeaponState st, WeaponStat
       return solveFrm("T_%s_2_%sRUN",st);
     }
   return nullptr;
+  }
+
+const Animation::Sequence* AnimationSolver::solveAnim(std::string_view scheme, bool run, bool invest) const {
+  // example: "T_MAGWALK_2_FBTSHOOT"
+
+  string_frm name("");
+  if(run && invest)
+    name = string_frm("T_MAGMOVE_2_",scheme,"CAST");
+  else if(run)
+    name = string_frm("T_MAGMOVE_2_",scheme,"SHOOT");
+  else if(run)
+    name = string_frm("T_MAGRUN_2_",scheme,"CAST");
+  else
+    name = string_frm("T_MAGRUN_2_",scheme,"SHOOT");
+
+  if(auto sq = solveFrm(name))
+    return sq;
+
+  name = string_frm("S_",scheme,"SHOOT");
+  return solveFrm(name);
   }
 
 const Animation::Sequence *AnimationSolver::solveAnim(Interactive *inter, AnimationSolver::Anim a, const Pose &) const {

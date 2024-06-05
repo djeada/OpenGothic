@@ -3,7 +3,13 @@
 #include <Tempest/Log>
 #include <Tempest/TextCodec>
 #include <cstring>
+#include <cassert>
+
+#if defined(__APPLE__)
 #include <filesystem>
+#endif
+
+#include <algorithm>
 
 #include "utils/installdetect.h"
 #include "utils/fileutil.h"
@@ -13,6 +19,22 @@ using namespace Tempest;
 using namespace FileUtil;
 
 static CommandLine* instance = nullptr;
+
+static const char16_t* toString(ScriptLang lang) {
+  switch(lang) {
+    case ScriptLang::EN: return u"Scripts_EN";
+    case ScriptLang::DE: return u"Scripts_DE";
+    case ScriptLang::PL: return u"Scripts_PL";
+    case ScriptLang::RU: return u"Scripts_RU";
+    case ScriptLang::FR: return u"Scripts_FR";
+    case ScriptLang::ES: return u"Scripts_ES";
+    case ScriptLang::IT: return u"Scripts_IT";
+    case ScriptLang::CZ: return u"Scripts_CZ";
+    case ScriptLang::NONE:
+      break;
+    }
+  return u"Scripts";
+  }
 
 CommandLine::CommandLine(int argc, const char** argv) {
   instance = this;
@@ -27,7 +49,7 @@ CommandLine::CommandLine(int argc, const char** argv) {
         Log::e("-game specified twice");
       mod = arg.substr(6);
       }
-    if(arg=="-g") {
+    else if(arg=="-g") {
       ++i;
       if(i<argc)
         gpath.assign(argv[i],argv[i]+std::strlen(argv[i]));
@@ -60,8 +82,11 @@ CommandLine::CommandLine(int argc, const char** argv) {
     else if(arg=="-g1") {
       forceG1 = true;
       }
-    else if(arg=="-g2") {
+    else if(arg=="-g2c") {
       forceG2 = true;
+      }
+    else if(arg=="-g2") {
+      forceG2NR = true;
       }
     else if(arg=="-dx12") {
       graphics = GraphicBackend::DirectX12;
@@ -74,17 +99,43 @@ CommandLine::CommandLine(int argc, const char** argv) {
       if(i<argc)
         isRQuery = (std::string_view(argv[i])!="0" && std::string_view(argv[i])!="false");
       }
+    else if(arg=="-fxaa") {
+      ++i;
+      if(i < argc) {
+        try {
+          fxaaPresetId = uint32_t(std::stoul(std::string(argv[i])));
+          fxaaPresetId = std::clamp(fxaaPresetId, 0u, uint32_t(FxaaPreset::PRESETS_COUNT)-1u);
+          }
+        catch (const std::exception& e) {
+          Log::i("failed to read fxaa preset: \"", std::string(argv[i]), "\"");
+          }
+        }
+      }
+    else if(arg=="-gi") {
+      ++i;
+      if(i<argc)
+        isGi = (std::string_view(argv[i])!="0" && std::string_view(argv[i])!="false");
+      }
     else if(arg=="-ms") {
       ++i;
       if(i<argc)
         isMeshSh = (std::string_view(argv[i])!="0" && std::string_view(argv[i])!="false");
+      }
+    else if(arg=="-bl") {
+      // not to document - debug only
+      ++i;
+      if(i<argc)
+        isBindlessSh = (std::string_view(argv[i])!="0" && std::string_view(argv[i])!="false");
+      }
+    else {
+      Log::i("unreacognized commandline option: \"", arg, "\"");
       }
     }
 
   if(gpath.empty()) {
     InstallDetect inst;
     gpath = inst.detectG2();
-#ifdef __OSX__
+#if defined(__APPLE__)
     if(!gpath.empty() && gpath==inst.applicationSupportDirectory()) {
       std::filesystem::current_path(gpath);
       }
@@ -98,18 +149,25 @@ CommandLine::CommandLine(int argc, const char** argv) {
   if(gpath.size()>0 && gpath.back()!='/')
     gpath.push_back('/');
 
-  gscript = nestedPath({u"_work",u"Data",u"Scripts",u"_compiled"},Dir::FT_Dir);
+  gscript   = nestedPath({u"_work",u"Data",u"Scripts",   u"_compiled"},Dir::FT_Dir);
+  gcutscene = nestedPath({u"_work",u"Data",u"Scripts",   u"content",u"CUTSCENE"},Dir::FT_Dir);
+
   gmod    = TextCodec::toUtf16(std::string(mod));
   if(!gmod.empty())
     gmod = nestedPath({u"system",gmod.c_str()},Dir::FT_File);
 
   if(!validateGothicPath()) {
-    Log::e("invalid gothic path: \"",TextCodec::toUtf8(gpath),"\"");
-    throw std::logic_error("gothic not found!"); //TODO: user-friendly message-box
+    if(gpath.empty()) {
+      Log::e("Gothic path is not provided. Please use command line argument -g <path>");
+      } else {
+      Log::e("Invalid gothic path: \"",TextCodec::toUtf8(gpath),"\"");
+      }
+    throw GothicNotFoundException("gothic not found!"); // TODO: user-friendly message-box
     }
   }
 
 const CommandLine& CommandLine::inst() {
+  assert(instance!=nullptr);
   return *instance;
   }
 
@@ -121,8 +179,22 @@ std::u16string_view CommandLine::rootPath() const {
   return gpath;
   }
 
-std::u16string_view CommandLine::scriptPath() const {
+std::u16string CommandLine::scriptPath() const {
   return gscript;
+  }
+
+std::u16string CommandLine::scriptPath(ScriptLang lang) const {
+  const char16_t* scripts = toString(lang);
+  return nestedPath({u"_work",u"Data",scripts,u"_compiled"},Dir::FT_Dir);
+  }
+
+std::u16string CommandLine::cutscenePath() const {
+  return gcutscene;
+  }
+
+std::u16string CommandLine::cutscenePath(ScriptLang lang) const {
+  const char16_t* scripts = toString(lang);
+  return nestedPath({u"_work",u"Data",scripts},Dir::FT_Dir);
   }
 
 std::u16string CommandLine::nestedPath(const std::initializer_list<const char16_t*>& name, Tempest::Dir::FileType type) const {

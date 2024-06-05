@@ -27,8 +27,6 @@ DamageCalculator::Val DamageCalculator::damageValue(Npc& src, Npc& other, const 
 
   if(ret.hasHit && !ret.invincible && Gothic::inst().version().game==2)
     ret.value = std::max<int32_t>(ret.value,MinDamage);
-  if(other.isImmortal() || (other.isPlayer() && Gothic::inst().isGodMode()))
-    ret.value = 0;
   return ret;
   }
 
@@ -44,7 +42,7 @@ DamageCalculator::Val DamageCalculator::damageFall(Npc& npc, float speed) {
   int32_t prot        = npc.protection(::PROT_FALL);
 
   Val ret;
-  ret.invincible = (prot<0 || npc.isImmortal() || (npc.isPlayer() && Gothic::inst().isGodMode()));
+  ret.invincible = (prot<0);
   ret.value      = int32_t(dmgPerMeter*(height-h0)/100.f - float(prot));
   if(ret.value<=0 || ret.invincible) {
     ret.value = 0;
@@ -108,7 +106,7 @@ DamageCalculator::Val DamageCalculator::rangeDamage(Npc&, Npc& nother, Damage dm
 
   int  value = 0;
   bool invincible = true;
-  for(unsigned int i=0; i<phoenix::damage_type::count; ++i) {
+  for(unsigned int i=0; i<zenkit::DamageType::NUM; ++i) {
     if(dmg[size_t(i)]==0)
       continue;
     int vd = std::max(dmg[size_t(i)] - other.protection[i],0);
@@ -146,11 +144,11 @@ DamageCalculator::Val DamageCalculator::swordDamage(Npc& nsrc, Npc& nother) {
   if(Gothic::inst().version().game==2) {
     if(nsrc.isMonster() && tal==TALENT_UNKNOWN) {
       // regular monsters always do critical damage
-      critChance = 0;
+      critChance = -1;
       }
 
     bool invincible = true;
-    for(unsigned int i=0; i<phoenix::damage_type::count; ++i) {
+    for(unsigned int i=0; i<zenkit::DamageType::NUM; ++i) {
       if((dtype & (1<<i))==0)
         continue;
       int vd = std::max(str + src.damage[i] - other.protection[i],0);
@@ -166,7 +164,7 @@ DamageCalculator::Val DamageCalculator::swordDamage(Npc& nsrc, Npc& nother) {
     } else {
     bool invincible = true;
     const int32_t mul = script.criticalDamageMultiplyer();
-    for(unsigned int i=0; i<phoenix::damage_type::count; ++i) {
+    for(unsigned int i=0; i<zenkit::DamageType::NUM; ++i) {
       if((dtype & (1<<i))==0)
         continue;
       int vd = 0;
@@ -194,13 +192,13 @@ bool DamageCalculator::checkDamageMask(Npc& nsrc, Npc& nother, const Bullet* b) 
 
   if(b!=nullptr) {
     auto dmg = b->damage();
-    for(unsigned int i=0;i<phoenix::damage_type::count;++i) {
+    for(unsigned int i=0;i<zenkit::DamageType::NUM;++i) {
       if(dmg[size_t(i)]>0 && other.protection[i]>=0)
         return true;
       }
     } else {
     const int dtype = damageTypeMask(nsrc);
-    for(unsigned int i=0;i<phoenix::damage_type::count;++i){
+    for(unsigned int i=0;i<zenkit::DamageType::NUM;++i){
       if((dtype & (1<<i))==0)
         continue;
       return true;
@@ -214,7 +212,7 @@ DamageCalculator::Damage DamageCalculator::rangeDamageValue(Npc& src) {
   const int dtype = damageTypeMask(src);
   int d = Gothic::inst().version().game==2 ? src.attribute(Attribute::ATR_DEXTERITY) : 0;
   Damage ret={};
-  for(unsigned int i=0;i<phoenix::damage_type::count;++i){
+  for(unsigned int i=0;i<zenkit::DamageType::NUM;++i){
     if((dtype & (1<<i))==0)
       continue;
     ret[size_t(i)] = d + src.handle().damage[i];

@@ -1,8 +1,7 @@
 #pragma once
 
 #include <Tempest/CommandBuffer>
-#include <phoenix/vobs/light.hh>
-#include <memory>
+#include <zenkit/vobs/Light.hh>
 
 #include "lightsource.h"
 #include "resources.h"
@@ -18,11 +17,11 @@ class LightGroup final {
     class Light final {
       public:
         Light() = default;
-        Light(LightGroup& owner, const phoenix::vobs::light& vob);
-        Light(LightGroup& owner, const phoenix::vobs::light_preset& vob);
+        Light(LightGroup& owner, const zenkit::VLight& vob);
+        Light(LightGroup& owner, const zenkit::LightPreset& vob);
         Light(LightGroup& owner);
-        Light(World& owner, const phoenix::vobs::light_preset& vob);
-        Light(World& owner, const phoenix::vobs::light& vob);
+        Light(World& owner, const zenkit::VLight& vob);
+        Light(World& owner, const zenkit::LightPreset& vob);
         Light(World& owner, std::string_view preset);
         Light(World& owner);
 
@@ -49,11 +48,13 @@ class LightGroup final {
       };
 
     void   dbgLights(DbgPainter& p) const;
-
     void   tick(uint64_t time);
+
     void   preFrameUpdate(uint8_t fId);
+    void   prepareUniforms();
+    void   prepareRtUniforms();
+
     void   draw(Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId);
-    void   setupUbo();
 
   private:
     using Vertex = Resources::VertexL;
@@ -91,23 +92,22 @@ class LightGroup final {
       void                     free(size_t id);
       };
 
-    size_t                             alloc(bool dynamic);
-    void                               free(size_t id);
+    size_t                     alloc(bool dynamic);
+    void                       free(size_t id);
 
-    LightSsbo&                         get (size_t id);
-    LightSource&                       getL(size_t id);
+    LightSsbo&                 get (size_t id);
+    LightSource&               getL(size_t id);
 
-    Tempest::RenderPipeline&           shader() const;
+    Tempest::RenderPipeline&   shader() const;
 
-    const phoenix::vobs::light_preset& findPreset(std::string_view preset) const;
+    const zenkit::LightPreset& findPreset(std::string_view preset) const;
 
-    const SceneGlobals&                      scene;
-    std::vector<phoenix::vobs::light_preset> presets;
+    const SceneGlobals&                  scene;
+    std::vector<zenkit::LightPreset>     presets;
 
     Tempest::UniformBuffer<Ubo>          uboBuf[Resources::MaxFramesInFlight];
 
     Tempest::IndexBuffer<uint16_t>       ibo;
-    Tempest::VertexBuffer<Tempest::Vec3> vbo;
 
     std::recursive_mutex                 sync;
     LightBucket                          bucketSt, bucketDyn;

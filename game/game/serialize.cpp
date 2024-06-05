@@ -96,7 +96,7 @@ void Serialize::closeEntry() {
   if(entryBuf.empty())
     return;
 
-  mz_uint level  = entryBuf.size()>256 ? MZ_BEST_COMPRESSION : MZ_NO_COMPRESSION;
+  mz_uint level  = entryBuf.size()>256 ? MZ_BEST_SPEED : MZ_NO_COMPRESSION;
   mz_bool status = mz_zip_writer_add_mem(&impl, entryName.c_str(), entryBuf.data(), entryBuf.size(), level);
   entryBuf .clear();
   entryName.clear();
@@ -120,8 +120,8 @@ bool Serialize::implSetEntry(std::string_view fname) {
       if(entryName[i]=='/' && i+1<entryName.size()) {
         const char prev = entryName[i+1];
         entryName[i+1] = '\0';
-        mz_uint32 id = mz_uint32(-1);
-        if(!mz_zip_reader_locate_file_v2(&impl, entryName.c_str(), nullptr, 0, &id)) {
+        const auto it = outFileList.insert(entryName.c_str());
+        if(it.second) {
           mz_bool status = mz_zip_writer_add_mem(&impl, entryName.c_str(), NULL, 0, MZ_NO_COMPRESSION);
           if(!status)
             throw std::runtime_error("unable to allocate entry in game archive");
@@ -286,7 +286,7 @@ void Serialize::implRead(Tempest::Pixmap& p) {
   readOffset += r.cursorPosition();
   }
 
-void Serialize::implWrite(const phoenix::c_npc& h) {
+void Serialize::implWrite(const zenkit::INpc& h) {
   write(uint32_t(h.symbol_index()));
   write(h.id,h.name,h.slot,h.effect,int32_t(h.type));
   write(int32_t(h.flags));
@@ -300,7 +300,7 @@ void Serialize::implWrite(const phoenix::c_npc& h) {
   write(h.wp,h.exp,h.exp_next,h.lp,h.bodystate_interruptable_override,h.no_focus);
   }
 
-void Serialize::readNpc(phoenix::vm& vm, std::shared_ptr<phoenix::c_npc>& h) {
+void Serialize::readNpc(zenkit::DaedalusVm& vm, std::shared_ptr<zenkit::INpc>& h) {
   uint32_t instanceSymbol=0;
   read(instanceSymbol);
 
@@ -332,11 +332,11 @@ void Serialize::implRead(FpLock &fp) {
   fp.load(*this);
   }
 
-void Serialize::implWrite(const phoenix::animation_sample &i) {
+void Serialize::implWrite(const zenkit::AnimationSample& i) {
   writeBytes(&i,sizeof(i));
   }
 
-void Serialize::implRead(phoenix::animation_sample &i) {
+void Serialize::implRead(zenkit::AnimationSample& i) {
   if (version() < 40) {
     read(i.position.x,i.position.y,i.position.z);
     read(i.rotation.x,i.rotation.y,i.rotation.z,i.rotation.w);

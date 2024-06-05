@@ -1,6 +1,7 @@
 #include "shaders.h"
 
 #include <Tempest/Device>
+#include <Tempest/Log>
 
 #include "gothic.h"
 #include "resources.h"
@@ -10,104 +11,73 @@
 
 using namespace Tempest;
 
-static constexpr uint32_t defaultWg = 64;
+//static constexpr uint32_t defaultWg = 64;
 
 Shaders* Shaders::instance = nullptr;
-
-void Shaders::ShaderSet::load(Device &device, std::string_view tag, bool hasTesselation, bool hasMeshlets) {
-  auto sh = GothicShader::get(string_frm(tag,'.',"frag",".sprv"));
-  fs = device.shader(sh.data,sh.len);
-
-  sh = GothicShader::get(string_frm(tag,'.',"vert",".sprv"));
-  vs = device.shader(sh.data,sh.len);
-
-  if(hasTesselation) {
-    auto sh = GothicShader::get(string_frm(tag,'.',"tesc",".sprv"));
-    tc = device.shader(sh.data,sh.len);
-
-    sh = GothicShader::get(string_frm(tag,'.',"tese",".sprv"));
-    te = device.shader(sh.data,sh.len);
-    }
-
-  if(hasMeshlets) {
-    sh = GothicShader::get(string_frm(tag,'.',defaultWg,".mesh",".sprv"));
-    me = device.shader(sh.data,sh.len);
-
-    sh = GothicShader::get(string_frm(tag,'.',defaultWg,".task",".sprv"));
-    ts = device.shader(sh.data,sh.len);
-    }
-  }
-
-void Shaders::MaterialTemplate::load(Device &device, std::string_view tag, bool hasTesselation, bool hasMeshlets) {
-  string_frm flnd = "lnd";
-  string_frm fobj = "obj";
-  string_frm fani = "ani";
-  string_frm fmph = "mph";
-  string_frm fpfx = "pfx";
-  if(!tag.empty()) {
-    flnd = string_frm("lnd_",tag);
-    fobj = string_frm("obj_",tag);
-    fani = string_frm("ani_",tag);
-    fmph = string_frm("mph_",tag);
-    fpfx = string_frm("pfx_",tag);
-    }
-  lnd.load(device,flnd,hasTesselation,hasMeshlets);
-  obj.load(device,fobj,hasTesselation,hasMeshlets);
-  ani.load(device,fani,hasTesselation,hasMeshlets);
-  mph.load(device,fmph,hasTesselation,hasMeshlets);
-  pfx.load(device,fpfx,hasTesselation,false);
-  }
 
 Shaders::Shaders() {
   instance = this;
   auto& device = Resources::device();
 
-  const bool meshlets = Gothic::inst().doMeshShading();
-
-  solid   .load(device,"gbuffer",   false,meshlets);
-  atest   .load(device,"gbuffer_at",false,meshlets);
-  ghost   .load(device,"ghost",     false,meshlets);
-  emmision.load(device,"emi",       false,meshlets);
-  multiply.load(device,"mul",       false,meshlets);
-
-  water    .load(device,"water",false,false);
-  waterTess.load(device,"water",device.properties().tesselationShader,false);
-
-  solidF  .load(device,"",  false,meshlets);
-  atestF  .load(device,"at",false,meshlets);
-
-  shadow  .load(device,"shadow",   false,meshlets);
-  shadowAt.load(device,"shadow_at",false,meshlets);
+  const bool meshlets = Gothic::options().doMeshShading;
 
   copyBuf = computeShader("copy.comp.sprv");
+  copyImg = computeShader("copy_img.comp.sprv");
   copy    = postEffect("copy");
 
-  stash = postEffect("stash");
+  path    = computeShader("path.comp.sprv");
 
-  ssao               = computeShader("ssao.comp.sprv");
-  ambientCompose     = ambientLightShader("ssao_compose");
-  ambientComposeSsao = ambientLightShader("ssao_compose_ssao");
+  stash   = postEffect("stash");
 
-  shadowResolve      = postEffect("shadow_resolve", "shadow_resolve",    RenderState::ZTestMode::NoEqual);
-  shadowResolveSh    = postEffect("shadow_resolve", "shadow_resolve_sh", RenderState::ZTestMode::NoEqual);
-  if(Gothic::inst().doRayQuery() && Resources::device().properties().bindless.nonUniformIndexing)
-    shadowResolveRq = postEffect("shadow_resolve", "shadow_resolve_rq", RenderState::ZTestMode::NoEqual);
+  clusterInit      = computeShader("cluster_init.comp.sprv");
+  clusterPath      = computeShader("cluster_patch.comp.sprv");
+  clusterTask      = computeShader("cluster_task.comp.sprv");
+  clusterTaskHiZ   = computeShader("cluster_task_hiz.comp.sprv");
+  clusterTaskHiZCr = computeShader("cluster_task_hiz_cr.comp.sprv");
+
+  ssao             = computeShader("ssao.comp.sprv");
+  ssaoBlur         = computeShader("ssao_blur.comp.sprv");
+
+  directLight      = postEffect("direct_light", "direct_light",    RenderState::ZTestMode::NoEqual);
+  directLightSh    = postEffect("direct_light", "direct_light_sh", RenderState::ZTestMode::NoEqual);
+  if(Gothic::options().doRayQuery && Resources::device().properties().descriptors.nonUniformIndexing)
+    directLightRq  = postEffect("direct_light", "direct_light_rq", RenderState::ZTestMode::NoEqual);
+
+  ambientLight     = ambientLightShader("ambient_light");
+  ambientLightSsao = ambientLightShader("ambient_light_ssao");
 
   irradiance         = computeShader("irradiance.comp.sprv");
   cloudsLut          = computeShader("clouds_lut.comp.sprv");
-  skyTransmittance   = postEffect("sky_transmittance");
-  skyMultiScattering = postEffect("sky_multi_scattering");
-  skyViewLut         = postEffect("sky_view_lut");
+  skyTransmittance   = postEffect("sky", "sky_transmittance");
+  skyMultiScattering = postEffect("sky", "sky_multi_scattering");
+  skyViewLut         = postEffect("sky", "sky_view_lut");
+  skyViewCldLut      = postEffect("sky", "sky_view_clouds_lut");
 
   fogViewLut3dLQ     = computeShader("fog_view_lut_lq.comp.sprv");
   fogViewLut3dHQ     = computeShader("fog_view_lut_hq.comp.sprv");
   shadowDownsample   = computeShader("shadow_downsample.comp.sprv");
   fogOcclusion       = computeShader("fog3d.comp.sprv");
 
+  skyExposure        = computeShader("sky_exposure.comp.sprv");
+
   sky                = postEffect("sky");
   fog                = fogShader ("fog");
-  fog3dLQ            = fogShader ("fog3d_lq");
   fog3dHQ            = fogShader ("fog3d_hq");
+
+  {
+    RenderState state;
+    state.setCullFaceMode (RenderState::CullMode::Front);
+    state.setBlendSource  (RenderState::BlendMode::One);
+    state.setBlendDest    (RenderState::BlendMode::SrcAlpha);
+    state.setZTestMode    (RenderState::ZTestMode::Always);
+    state.setZWriteEnabled(false);
+
+    auto sh      = GothicShader::get("sky.vert.sprv");
+    auto vsLight = device.shader(sh.data,sh.len);
+    sh           = GothicShader::get("sky_pathtrace.frag.sprv");
+    auto fsLight = device.shader(sh.data,sh.len);
+    skyPathTrace = device.pipeline(Triangles, state, vsLight, fsLight);
+  }
 
   underwaterT        = inWaterShader("underwater_t", false);
   underwaterS        = inWaterShader("underwater_s", true);
@@ -143,8 +113,8 @@ Shaders::Shaders() {
   sh           = GothicShader::get("light.frag.sprv");
   auto fsLight = device.shader(sh.data,sh.len);
   lights       = device.pipeline(Triangles, state, vsLight, fsLight);
-  if(Gothic::inst().doRayQuery()) {
-    if(Resources::device().properties().bindless.nonUniformIndexing) {
+  if(Gothic::options().doRayQuery) {
+    if(Resources::device().properties().descriptors.nonUniformIndexing) {
       sh      = GothicShader::get("light_rq_at.frag.sprv");
       fsLight = device.shader(sh.data,sh.len);
       } else {
@@ -155,14 +125,26 @@ Shaders::Shaders() {
     }
   }
 
-  tonemapping = postEffect("tonemapping", "tonemapping", RenderState::ZTestMode::Always);
+  tonemapping        = postEffect("tonemapping", "tonemapping",    RenderState::ZTestMode::Always);
+  tonemappingUpscale = postEffect("tonemapping", "tonemapping_up", RenderState::ZTestMode::Always);
 
-  if(meshlets) {
-    hiZPot = computeShader("hiz_pot.comp.sprv");
+  const auto fxaaZTestMode = RenderState::ZTestMode::Always;
+  fxaaPresets[uint32_t(FxaaPreset::OFF)]        = Tempest::RenderPipeline();
+  fxaaPresets[uint32_t(FxaaPreset::CONSOLE)]    = postEffect("fxaa", "fxaa_quality_0", fxaaZTestMode);
+  fxaaPresets[uint32_t(FxaaPreset::PC_LOW)]     = postEffect("fxaa", "fxaa_quality_1", fxaaZTestMode);
+  fxaaPresets[uint32_t(FxaaPreset::PC_MEDIUM)]  = postEffect("fxaa", "fxaa_quality_2", fxaaZTestMode);
+  fxaaPresets[uint32_t(FxaaPreset::PC_HIGH)]    = postEffect("fxaa", "fxaa_quality_3", fxaaZTestMode);
+  fxaaPresets[uint32_t(FxaaPreset::PC_EXTREME)] = postEffect("fxaa", "fxaa_quality_4", fxaaZTestMode);
+
+  hiZPot = computeShader("hiz_pot.comp.sprv");
+  hiZMip = computeShader("hiz_mip_img.comp.sprv");
+  /*
+  if(device.properties().hasAtomicFormat(TextureFormat::R32U))
+    hiZMip = computeShader("hiz_mip_img.comp.sprv"); else
     hiZMip = computeShader("hiz_mip.comp.sprv");
-    }
+    */
 
-  if(meshlets) {
+  if(meshlets && device.properties().meshlets.maxGroupSize.x>=256) {
     RenderState state;
     state.setCullFaceMode(RenderState::CullMode::Front);
     state.setZTestMode   (RenderState::ZTestMode::Greater);
@@ -174,22 +156,44 @@ Shaders::Shaders() {
     hiZReproj = device.pipeline(state,Shader(),ms,fs);
     }
 
-  if(meshlets) {
+  if(Gothic::options().doRayQuery) {
     RenderState state;
-    state.setCullFaceMode(RenderState::CullMode::Front);
+    state.setCullFaceMode(RenderState::CullMode::NoCull);
     state.setZTestMode   (RenderState::ZTestMode::Less);
 
-    auto sh = GothicShader::get(string_frm("lnd_hiz.",defaultWg,".mesh.sprv"));
-    auto ms = device.shader(sh.data,sh.len);
-
-    sh      = GothicShader::get(string_frm("lnd_hiz.",defaultWg,".task.sprv"));
-    auto ts = device.shader(sh.data,sh.len);
-
-    sh      = GothicShader::get("lnd_hiz.frag.sprv");
+    auto sh = GothicShader::get("probe_dbg.vert.sprv");
+    auto vs = device.shader(sh.data,sh.len);
+    sh = GothicShader::get("probe_dbg.frag.sprv");
     auto fs = device.shader(sh.data,sh.len);
+    probeDbg = device.pipeline(Triangles,state,vs,fs);
 
-    lndPrePass = device.pipeline(state,ts,ms,fs);
+    sh = GothicShader::get("probe_hit_dbg.vert.sprv");
+    vs = device.shader(sh.data,sh.len);
+    sh = GothicShader::get("probe_hit_dbg.frag.sprv");
+    fs = device.shader(sh.data,sh.len);
+    probeHitDbg = device.pipeline(Triangles,state,vs,fs);
+
+    probeInit      = computeShader("probe_init.comp.sprv");
+    probeClear     = computeShader("probe_clear.comp.sprv");
+    probeClearHash = computeShader("probe_clear_hash.comp.sprv");
+    probeMakeHash  = computeShader("probe_make_hash.comp.sprv");
+    probeVote      = computeShader("probe_vote.comp.sprv");
+    probePrune     = computeShader("probe_prune.comp.sprv");
+    probeAlocation = computeShader("probe_allocation.comp.sprv");
+    probeTrace     = computeShader("probe_trace.comp.sprv");
+    probeLighting  = computeShader("probe_lighting.comp.sprv");
+
+    state.setBlendSource  (RenderState::BlendMode::One);
+    state.setBlendDest    (RenderState::BlendMode::SrcAlpha);  // for debugging
+    state.setZTestMode    (RenderState::ZTestMode::NoEqual);
+    state.setZWriteEnabled(false);
+    sh = GothicShader::get("probe_ambient.vert.sprv");
+    vs = device.shader(sh.data,sh.len);
+    sh = GothicShader::get("probe_ambient.frag.sprv");
+    fs = device.shader(sh.data,sh.len);
+    probeAmbient = device.pipeline(Triangles,state,vs,fs);
     }
+
   {
     RenderState state;
     state.setCullFaceMode(RenderState::CullMode::Front);
@@ -211,17 +215,26 @@ Shaders& Shaders::inst() {
   return *instance;
   }
 
-const RenderPipeline* Shaders::materialPipeline(const Material& mat, ObjectsBucket::Type t, PipelineType pt) const {
-  const auto alpha = (mat.isGhost ? Material::Ghost : mat.alpha);
-
-  for(auto& i:materials) {
-    if(i.alpha==alpha && i.type==t && i.pipelineType==pt)
-      return &i.pipeline;
+const RenderPipeline* Shaders::materialPipeline(const Material& mat, DrawCommands::Type t, PipelineType pt, bool bl) const {
+  if(t==DrawCommands::Static) {
+    // same shader
+    t = DrawCommands::Movable;
     }
 
-  const MaterialTemplate* forward  = nullptr;
-  const MaterialTemplate* deffered = nullptr;
-  const MaterialTemplate* shadow   = nullptr;
+  if(pt!=PipelineType::T_Main && !mat.isSolid()) {
+    return nullptr;
+    }
+  if(pt!=PipelineType::T_Main && mat.alpha==Material::Water) {
+    return nullptr;
+    }
+
+  const auto alpha   = (mat.isGhost ? Material::Ghost : mat.alpha);
+  const bool trivial = (!mat.hasUvAnimation() && alpha==Material::Solid && t==DrawCommands::Landscape);
+
+  for(auto& i:materials) {
+    if(i.alpha==alpha && i.type==t && i.pipelineType==pt && i.bindless==bl && i.trivial==trivial)
+      return &i.pipeline;
+    }
 
   RenderState state;
   state.setCullFaceMode(RenderState::CullMode::Front);
@@ -234,42 +247,22 @@ const RenderPipeline* Shaders::materialPipeline(const Material& mat, ObjectsBuck
 
   switch(alpha) {
     case Material::Solid:
-      forward  = &solidF;
-      deffered = &solid;
-      shadow   = &this->shadow;
-      break;
     case Material::AlphaTest:
-      forward  = &atestF;
-      deffered = &atest;
-      shadow   = &shadowAt;
-      break;
     case Material::Water:
-      if(mat.waveMaxAmplitude>0.f)
-        forward  = &waterTess; else
-        forward  = &water;
-      break;
     case Material::Ghost:
-      forward  = &ghost;
       break;
     case Material::Transparent:
-      forward  = &solidF;
-      deffered = nullptr;
-
       state.setBlendSource  (RenderState::BlendMode::SrcAlpha); // premultiply in shader
       state.setBlendDest    (RenderState::BlendMode::OneMinusSrcAlpha);
       state.setZWriteEnabled(false);
       break;
     case Material::AdditiveLight:
-      forward = &emmision;
-
       state.setBlendSource  (RenderState::BlendMode::SrcAlpha);
       state.setBlendDest    (RenderState::BlendMode::One);
       state.setZWriteEnabled(false);
       break;
     case Material::Multiply:
     case Material::Multiply2:
-      forward = &multiply;
-
       state.setBlendSource  (RenderState::BlendMode::DstColor);
       state.setBlendDest    (RenderState::BlendMode::SrcColor);
       state.setZWriteEnabled(false);
@@ -278,52 +271,146 @@ const RenderPipeline* Shaders::materialPipeline(const Material& mat, ObjectsBuck
 
   static bool overdrawDbg = false;
   if(overdrawDbg &&
-     (alpha==Material::Solid || alpha==Material::AlphaTest) && t!=ObjectsBucket::Landscape && t!=ObjectsBucket::LandscapeShadow && pt!=T_Shadow) {
+      (alpha==Material::Solid || alpha==Material::AlphaTest) && t!=DrawCommands::Landscape && pt!=T_Shadow) {
     state.setBlendSource(RenderState::BlendMode::One);
     state.setBlendDest  (RenderState::BlendMode::One);
     state.setZWriteEnabled(false);
     state.setZTestMode(RenderState::ZTestMode::Always);
     }
 
-  const MaterialTemplate* temp = nullptr;
-  switch(pt) {
-    case T_Forward:
-      temp = forward;
+  const char* vsTok = "";
+  const char* fsTok = "";
+
+  switch(t) {
+    case DrawCommands::Landscape:
+      vsTok = "lnd";
+      fsTok = "lnd";
       break;
-    case T_Deffered:
-      temp = deffered;
+    case DrawCommands::Static:
+    case DrawCommands::Movable:
+      vsTok = "obj";
+      fsTok = "obj";
       break;
-    case T_Shadow:
-      temp = shadow;
+    case DrawCommands::Animated:
+      vsTok = "ani";
+      fsTok = "obj";
+      break;
+    case DrawCommands::Pfx:
+      vsTok = "pfx";
+      fsTok = "pfx";
+      break;
+    case DrawCommands::Morph:
+      vsTok = "mph";
+      fsTok = "obj";
       break;
     }
 
-  if(temp==nullptr)
+  const char* typeVsM = nullptr;
+  const char* typeVsD = nullptr;
+  const char* typeFsM = nullptr;
+  const char* typeFsD = nullptr;
+
+  switch(alpha) {
+    case Material::Solid:
+      typeVsM = "";
+      typeFsM = "_g";
+      typeVsD = "_d";
+      typeFsD = "_d";
+      if(trivial)
+        typeFsM = "_g_s";
+      break;
+    case Material::AlphaTest:
+      typeVsM = "";
+      typeFsM = "_g_at";
+      typeVsD = "_d_at";
+      typeFsD = "_d_at";
+      break;
+    case Material::Transparent:
+      typeVsM = "_f";
+      typeFsM = "_f";
+      break;
+    case Material::Multiply:
+    case Material::Multiply2:
+      typeVsM = "";
+      typeFsM = "_e";
+      break;
+    case Material::AdditiveLight:
+      typeVsM = "";
+      typeFsM = "_e";
+      break;
+    case Material::Water:
+      typeVsM = "_f";
+      typeFsM = "_w";
+      break;
+    case Material::Ghost:
+      typeVsM = "";
+      typeFsM = "_x";
+      break;
+    }
+
+  const char* typeVs = "";
+  const char* typeFs = "";
+  switch(pt) {
+    case T_Shadow:
+    case T_Depth:
+      typeVs = typeVsD;
+      typeFs = typeFsD;
+      break;
+    case T_Main:
+      typeVs = typeVsM;
+      typeFs = typeFsM;
+      break;
+    }
+
+  if(typeVs==nullptr || typeFs==nullptr)
     return nullptr;
+
+  const char* bindless = bl ? "_bindless" : "_slot";
 
   materials.emplace_front();
   auto& b = materials.front();
   b.alpha        = alpha;
   b.type         = t;
   b.pipelineType = pt;
-  switch(t) {
-    case ObjectsBucket::Landscape:
-    case ObjectsBucket::LandscapeShadow:
-      b.pipeline = pipeline(state,temp->lnd);
-      break;
-    case ObjectsBucket::Static:
-    case ObjectsBucket::Movable:
-      b.pipeline = pipeline(state,temp->obj);
-      break;
-    case ObjectsBucket::Morph:
-      b.pipeline = pipeline(state,temp->mph);
-      break;
-    case ObjectsBucket::Animated:
-      b.pipeline = pipeline(state,temp->ani);
-      break;
-    case ObjectsBucket::Pfx:
-      b.pipeline = pipeline(state,temp->pfx);
-      break;
+  b.bindless     = bl;
+  b.trivial      = trivial;
+
+  auto& device = Resources::device();
+  if(mat.isTesselated() && device.properties().tesselationShader && t==DrawCommands::Landscape && true) {
+    auto shVs = GothicShader::get(string_frm("main_", vsTok, typeVs, bindless, ".vert.sprv"));
+    auto shTc = GothicShader::get(string_frm("main_", vsTok, typeVs, bindless, ".tesc.sprv"));
+    auto shTe = GothicShader::get(string_frm("main_", vsTok, typeVs, bindless, ".tese.sprv"));
+    auto shFs = GothicShader::get(string_frm("main_", fsTok, typeFs, bindless, ".frag.sprv"));
+
+    auto vs = device.shader(shVs.data,shVs.len);
+    auto tc = device.shader(shTc.data,shTc.len);
+    auto te = device.shader(shTe.data,shTe.len);
+    auto fs = device.shader(shFs.data,shFs.len);
+    b.pipeline = device.pipeline(Triangles, state, vs, tc, te, fs);
+    }
+  else if(Gothic::options().doMeshShading && t!=DrawCommands::Pfx) {
+    auto shMs = GothicShader::get(string_frm("main_", vsTok, typeVs, bindless, ".mesh.sprv"));
+    auto shFs = GothicShader::get(string_frm("main_", fsTok, typeFs, bindless, ".frag.sprv"));
+
+    auto ms = device.shader(shMs.data,shMs.len);
+    auto fs = device.shader(shFs.data,shFs.len);
+    b.pipeline = device.pipeline(state, Shader(), ms, fs);
+    }
+  else if(t!=DrawCommands::Pfx) {
+    auto shVs = GothicShader::get(string_frm("main_", vsTok, typeVs, bindless, ".vert.sprv"));
+    auto shFs = GothicShader::get(string_frm("main_", fsTok, typeFs, bindless, ".frag.sprv"));
+
+    auto vs = device.shader(shVs.data,shVs.len);
+    auto fs = device.shader(shFs.data,shFs.len);
+    b.pipeline = device.pipeline(Triangles, state, vs, fs);
+    }
+  else {
+    auto shVs = GothicShader::get(string_frm("main_", vsTok, typeVs, ".vert.sprv"));
+    auto shFs = GothicShader::get(string_frm("main_", fsTok, typeFs, ".frag.sprv"));
+
+    auto vs = device.shader(shVs.data,shVs.len);
+    auto fs = device.shader(shFs.data,shFs.len);
+    b.pipeline = device.pipeline(Triangles, state, vs, fs);
     }
 
   return &b.pipeline;
@@ -367,7 +454,7 @@ RenderPipeline Shaders::fogShader(std::string_view name) {
     state.setBlendDest(RenderState::BlendMode::OneMinusSrcAlpha);
     }
 
-  auto sh = GothicShader::get(string_frm(name,".vert.sprv"));
+  auto sh = GothicShader::get("sky.vert.sprv");
   auto vs = device.shader(sh.data,sh.len);
 
   sh      = GothicShader::get(string_frm(name,".frag.sprv"));
@@ -427,27 +514,14 @@ RenderPipeline Shaders::ambientLightShader(std::string_view name) {
   RenderState state;
   state.setCullFaceMode (RenderState::CullMode::Front);
   state.setBlendSource  (RenderState::BlendMode::One);
-  state.setBlendDest    (RenderState::BlendMode::One);
+  state.setBlendDest    (RenderState::BlendMode::SrcAlpha); // debug
   state.setZTestMode    (RenderState::ZTestMode::NoEqual);
   state.setZWriteEnabled(false);
 
-  auto sh = GothicShader::get("ssao_compose.vert.sprv");
+  auto sh = GothicShader::get("ambient_light.vert.sprv");
   auto vs = device.shader(sh.data,sh.len);
   sh      = GothicShader::get(string_frm(name,".frag.sprv"));
   auto fs = device.shader(sh.data,sh.len);
 
   return device.pipeline(Triangles, state, vs, fs);
-  }
-
-RenderPipeline Shaders::pipeline(RenderState& st, const ShaderSet &sh) const {
-  if(!sh.me.isEmpty() && !sh.ts.isEmpty()) {
-    return Resources::device().pipeline(st,sh.ts,sh.me,sh.fs);
-    }
-  if(!sh.me.isEmpty()) {
-    return Resources::device().pipeline(st,Shader(),sh.me,sh.fs);
-    }
-  if(!sh.tc.isEmpty() && !sh.te.isEmpty()) {
-    return Resources::device().pipeline(Triangles,st,sh.vs,sh.tc,sh.te,sh.fs);
-    }
-  return Resources::device().pipeline(Triangles,st,sh.vs,sh.fs);
   }

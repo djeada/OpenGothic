@@ -1,7 +1,7 @@
 #pragma once
 
-#include <phoenix/vobs/misc.hh>
-#include <phoenix/vobs/trigger.hh>
+#include <zenkit/vobs/Misc.hh>
+#include <zenkit/vobs/Trigger.hh>
 #include <string>
 
 #include "world/objects/vob.h"
@@ -19,7 +19,7 @@ class TriggerEvent final {
       T_Enable,
       T_Disable,
       T_ToggleEnable,
-      T_Activate,
+      T_Touch,
       T_StartupFirstTime,
       T_Startup,
       T_Move,
@@ -38,40 +38,29 @@ class TriggerEvent final {
     Type              type        = T_Trigger;
     uint64_t          timeBarrier = 0;
     struct {
-      phoenix::mover_message_type msg = phoenix::mover_message_type::fixed_direct;
-      int32_t                     key = 0;
+      zenkit::MoverMessageType msg = zenkit::MoverMessageType::FIXED_DIRECT;
+      int32_t                  key = 0;
       } move;
   };
 
 class AbstractTrigger : public Vob {
   public:
-    AbstractTrigger(Vob* parent, World& world, const phoenix::vob& data, Flags flags);
+    AbstractTrigger(Vob* parent, World& world, const zenkit::VirtualObject& data, Flags flags);
     virtual ~AbstractTrigger();
 
     std::string_view             name() const;
     bool                         isEnabled() const;
+    bool                         hasDelayedEvents() const;
 
+    void                         processDelayedEvents();
     void                         processEvent(const TriggerEvent& evt);
     virtual void                 onIntersect(Npc& n);
     virtual void                 tick(uint64_t dt);
-
-    virtual bool                 hasVolume() const;
-    bool                         checkPos(const Tempest::Vec3& pos) const;
 
     void                         save(Serialize& fout) const override;
     void                         load(Serialize &fin) override;
 
   protected:
-    enum ReactFlg:uint8_t {
-      ReactToOnTrigger = 1,
-      ReactToOnTouch   = 1<<1,
-      ReactToOnDamage  = 1<<2,
-      RespondToObject  = 1<<3,
-      RespondToPC      = 1<<4,
-      RespondToNPC     = 1<<5,
-      StartEnabled     = 1<<6,
-      };
-
     struct Cb : DynamicWorld::BBoxCallback {
       Cb(AbstractTrigger* tg):tg(tg) {}
       void onCollide(DynamicWorld::BulletBody &other) override;
@@ -83,11 +72,11 @@ class AbstractTrigger : public Vob {
     virtual void                 onGotoMsg(const TriggerEvent& evt);
     void                         moveEvent() override;
 
-    bool                         hasFlag(ReactFlg flg) const;
-
     void                         enableTicks();
     void                         disableTicks();
     const std::vector<Npc*>&     intersections() const;
+
+    void                         implProcessEvent(const TriggerEvent& evt);
 
   private:
     Cb                           callback;
@@ -95,14 +84,22 @@ class AbstractTrigger : public Vob {
     CollisionZone                boxNpc;
     Tempest::Vec3                bboxSize, bboxOrigin;
 
-    float                        fireDelaySec = 0;
-    uint32_t                     maxActivationCount = 0;
-    uint32_t                     triggerFlags = 0;
-    uint32_t                     filterFlags = 0;
+    uint64_t                     fireDelay          = 0;
+    uint64_t                     retriggerDelay     = 0;
+    uint32_t                     maxActivationCount = uint32_t(-1);
+    bool                         sendUntrigger      = true;
+    bool                         reactToOnTrigger   = true;
+    bool                         reactToOnTouch     = true;
+    bool                         respondToNpc       = true;
+    bool                         respondToPlayer    = true;
+    bool                         respondToObject    = true;
 
     uint32_t                     emitCount = 0;
     bool                         disabled  = false;
     uint64_t                     emitTimeLast = 0;
+
+    TriggerEvent                 delayedEvent;
+    bool                         ticksEnabled = false;
 
   protected:
     std::string                  vobName;

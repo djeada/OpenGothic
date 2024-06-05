@@ -3,8 +3,6 @@
 #include "graphics/shaders.h"
 #include "gothic.h"
 
-#include <cassert>
-
 static uint32_t nextPot(uint32_t x) {
   x--;
   x |= x >> 1;
@@ -50,6 +48,19 @@ SceneGlobals::~SceneGlobals() {
   Gothic::inst().onSettingsChanged.ubind(this,&SceneGlobals::initSettings);
   }
 
+bool SceneGlobals::isShadowView(VisCamera v) {
+  switch (v) {
+    case V_Shadow0:
+    case V_Shadow1:
+      return true;
+    case V_Main:
+    case V_HiZ:
+    case V_Count:
+      return false;
+    }
+  return false;
+  }
+
 void SceneGlobals::initSettings() {
   zWindEnabled = Gothic::inst().settingsGetI("ENGINE","zWindEnabled")!=0;
 
@@ -73,6 +84,8 @@ void SceneGlobals::setViewProject(const Tempest::Matrix4x4& v, const Tempest::Ma
 
   uboGlobalCpu.view           = v;
   uboGlobalCpu.project        = p;
+  uboGlobalCpu.projectInv     = p;
+  uboGlobalCpu.projectInv.inverse();
   uboGlobalCpu.viewProject    = vp;
   uboGlobalCpu.viewProjectInv = vp;
   uboGlobalCpu.viewProjectInv.inverse();
@@ -82,6 +95,7 @@ void SceneGlobals::setViewProject(const Tempest::Matrix4x4& v, const Tempest::Ma
   uboGlobalCpu.clipInfo.x = zNear*zFar;
   uboGlobalCpu.clipInfo.y = zNear-zFar;
   uboGlobalCpu.clipInfo.z = zFar;
+  znear                   = zNear;
 
   uboGlobalCpu.camPos = Tempest::Vec3(0,0,1);
   uboGlobalCpu.viewProjectInv.project(uboGlobalCpu.camPos);
@@ -119,7 +133,7 @@ void SceneGlobals::setSky(const Sky& s) {
   uboGlobalCpu.cloudsDir[0]  = s.cloudsOffset(0);
   uboGlobalCpu.cloudsDir[1]  = s.cloudsOffset(1);
   uboGlobalCpu.isNight       = s.isNight();
-  uboGlobalCpu.exposure      = s.autoExposure();
+  uboGlobalCpu.exposure      = 1;
   }
 
 void SceneGlobals::setUnderWater(bool w) {
@@ -143,7 +157,7 @@ void SceneGlobals::commitUbo(uint8_t fId) {
   for(size_t i=V_Shadow0; i<V_Count; ++i) {
     auto& ubo = perView[i];
     ubo = uboGlobalCpu;
-    if(i!=V_Main)
+    if(V_Shadow0<=i && i<=V_ShadowLast)
       ubo.viewProject = uboGlobalCpu.viewShadow[i-V_Shadow0];
     std::memcpy(ubo.frustrum, frustrum[i].f, sizeof(ubo.frustrum));
     }

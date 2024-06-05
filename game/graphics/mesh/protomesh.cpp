@@ -42,26 +42,22 @@ ProtoMesh::ProtoMesh(PackedMesh&& pm, std::string_view fname)
   setupScheme(fname);
   }
 
-ProtoMesh::ProtoMesh(PackedMesh&& pm, const std::vector<phoenix::morph_animation>& aniList, std::string_view fname)
+ProtoMesh::ProtoMesh(PackedMesh&& pm, const std::vector<zenkit::MorphAnimation>& aniList, std::string_view fname)
   : ProtoMesh(std::move(pm),fname) {
   if(attach.size()!=1) {
     Log::d("skip animations for: ",fname);
     return;
     }
 
-  auto& device = Resources::device();
-
-  const size_t ssboAlign      = device.properties().ssbo.offsetAlign;
-  const size_t indexSz        = sizeof(int32_t[4])*((pm.verticesId.size()+3)/4);
-  const size_t indexSzAligned = ((indexSz+ssboAlign-1)/ssboAlign)*ssboAlign;
-  size_t       samplesCnt     = 0;
+  const size_t indexSz    = sizeof(int32_t[4])*((pm.verticesId.size()+3)/4);
+  size_t       samplesCnt = 0;
 
   for(auto& i:aniList) {
     samplesCnt += i.samples.size();
     }
 
-  morphIndex   = Resources::ssbo(nullptr, indexSzAligned*aniList.size());
-  morphSamples = Resources::ssbo(nullptr, samplesCnt*sizeof(Vec4));
+  morphIndex   = Resources::ssbo(Tempest::Uninitialized, indexSz*aniList.size());
+  morphSamples = Resources::ssbo(Tempest::Uninitialized, samplesCnt*sizeof(Vec4));
 
   std::vector<int32_t> remapId;
   std::vector<Vec4>    samples;
@@ -71,11 +67,11 @@ ProtoMesh::ProtoMesh(PackedMesh&& pm, const std::vector<phoenix::morph_animation
   for(size_t i=0; i<aniList.size(); ++i) {
     remap(aniList[i],pm.verticesId,remapId,samples,samplesCnt);
 
-    morphIndex  .update(remapId.data(), i*indexSzAligned,        remapId.size()*sizeof(remapId[0]));
+    morphIndex  .update(remapId.data(), i*indexSz,               remapId.size()*sizeof(remapId[0]));
     morphSamples.update(samples.data(), samplesCnt*sizeof(Vec4), samples.size()*sizeof(Vec4)      );
 
     morph[i] = mkAnimation(aniList[i]);
-    morph[i].index = (i*indexSzAligned)/sizeof(int32_t);
+    morph[i].index = (i*indexSz)/sizeof(int32_t);
 
     samplesCnt += samples.size();
     }
@@ -89,7 +85,7 @@ ProtoMesh::ProtoMesh(PackedMesh&& pm, const std::vector<phoenix::morph_animation
     }
   }
 
-ProtoMesh::ProtoMesh(const phoenix::model &library, std::unique_ptr<Skeleton>&& sk, std::string_view fname)
+ProtoMesh::ProtoMesh(const zenkit::Model& library, std::unique_ptr<Skeleton>&& sk, std::string_view fname)
   :skeleton(std::move(sk)), fname(fname) {
   for(auto& m:library.mesh.attachments) {
     PackedMesh pack(m.second,PackedMesh::PK_Visual);
@@ -168,7 +164,7 @@ ProtoMesh::ProtoMesh(const phoenix::model &library, std::unique_ptr<Skeleton>&& 
   setupScheme(fname);
   }
 
-ProtoMesh::ProtoMesh(const phoenix::model_hierarchy& library, std::unique_ptr<Skeleton>&& sk, std::string_view fname)
+ProtoMesh::ProtoMesh(const zenkit::ModelHierarchy& library, std::unique_ptr<Skeleton>&& sk, std::string_view fname)
       :skeleton(std::move(sk)), fname(fname) {
   nodes.resize(skeleton == nullptr ? 0 : skeleton->nodes.size());
   for(size_t i = 0; i < nodes.size(); ++i) {
@@ -204,7 +200,7 @@ ProtoMesh::ProtoMesh(const phoenix::model_hierarchy& library, std::unique_ptr<Sk
   setupScheme(fname);
   }
 
-ProtoMesh::ProtoMesh(const phoenix::model_mesh& library, std::unique_ptr<Skeleton>&& sk, std::string_view fname)
+ProtoMesh::ProtoMesh(const zenkit::ModelMesh& library, std::unique_ptr<Skeleton>&& sk, std::string_view fname)
   :skeleton(std::move(sk)), fname(fname){
   for(auto& m:library.attachments) {
     PackedMesh pack(m.second,PackedMesh::PK_Visual);
@@ -353,7 +349,7 @@ void ProtoMesh::setupScheme(std::string_view s) {
   scheme = s;
   }
 
-void ProtoMesh::remap(const phoenix::morph_animation& a,
+void ProtoMesh::remap(const zenkit::MorphAnimation& a,
                       const std::vector<uint32_t>& vertId,
                       std::vector<int32_t>&        remap,
                       std::vector<Tempest::Vec4>&  samples,
@@ -378,7 +374,7 @@ void ProtoMesh::remap(const phoenix::morph_animation& a,
   }
 }
 
-ProtoMesh::Morph ProtoMesh::mkAnimation(const phoenix::morph_animation& a) {
+ProtoMesh::Morph ProtoMesh::mkAnimation(const zenkit::MorphAnimation& a) {
   Morph ret;
   ret.name            = a.name;
   ret.numFrames       = a.frame_count;

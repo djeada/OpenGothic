@@ -35,14 +35,24 @@ vec3 acesTonemapInv(vec3 x) {
   return (-0.59 * x + 0.03 - sqrt(-1.0127 * x*x + 1.3702 * x + 0.0009)) / (2.0 * (2.43*x - 2.51));
   }
 
-// HACK: need to preserve look-and-fill of original graphics
-vec3 textureLinear(vec3 rgb) {
-#if defined(EMISSIVE)
-  vec3 linear = (srgbDecode(rgb)*1.0); // emissive objects, spells
-#else
-  vec3 linear = (srgbDecode(rgb)*0.78);
-#endif
-  return acesTonemapInv(linear);
+vec3 textureEmmisive(vec3 rgb) {
+  const vec3 linear = srgbDecode(rgb);
+  return acesTonemapInv(linear) * 3.0;
+  }
+
+vec3 textureAlbedo(vec3 rgb) {
+  // return vec3(0.58, 0.49, 0.46); // brick
+  // return vec3(0.26, 0.11, 0.06); // brick2
+  // return vec3(0.52, 0.41, 0.36); // wood
+  // return vec3(0.48, 0.53, 0.30); // grass
+  // return vec3(0.44, 0.39, 0.23); // sand
+  // return vec3(0.9);
+  // return acesTonemapInv(linear*0.8);
+  // return acesTonemapInv(linear*0.78+0.001);
+
+  // HACK: need to preserve look-and-fill of original graphics
+  const vec3 linear = srgbDecode(rgb);
+  return acesTonemapInv(linear*0.78+0.001)*5.0; // adjusted to have 'realistic' albedo values
   }
 
 #endif

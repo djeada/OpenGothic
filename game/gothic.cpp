@@ -6,7 +6,7 @@
 #include <cstring>
 #include <cctype>
 
-#include <phoenix/ext/daedalus_classes.hh>
+#include <zenkit/addon/daedalus.hh>
 
 #include "game/definitions/visualfxdefinitions.h"
 #include "game/definitions/sounddefinitions.h"
@@ -36,12 +36,36 @@ static bool hasMeshShader() {
   return false;
   }
 
+static bool hasBindless() {
+  const auto& p = Resources::device().properties();
+  if(p.descriptors.nonUniformIndexing && p.descriptors.maxTexture>=65000 && p.descriptors.maxStorage>=65000)
+    return true;
+  return false;
+  }
+
 Gothic::Gothic() {
   instance = this;
 
   systemPackIniFile.reset(new IniFile(nestedPath({u"system",u"SystemPack.ini"},Dir::FT_File)));
   showFpsCounter = systemPackIniFile->getI("DEBUG","Show_FPS_Counter");
-  hideFocus      = systemPackIniFile->getI("PARAMETERS","HideFocus");
+  opts.hideFocus = systemPackIniFile->getI("PARAMETERS","HideFocus");
+  opts.cameraFov = systemPackIniFile->getF("PARAMETERS","VerticalFOV");
+  if(opts.cameraFov<1.f) {
+    opts.cameraFov = 67.5;
+    }
+  opts.interfaceScale = systemPackIniFile->getF("INTERFACE","Scale",0);
+  if(opts.interfaceScale<=0) {
+    opts.interfaceScale = 1;
+    }
+  opts.inventoryCellSize = systemPackIniFile->getI("INTERFACE","InventoryCellSize",opts.inventoryCellSize);
+  opts.inventoryCellSize = std::max(opts.inventoryCellSize, 10);
+
+  opts.saveGameImageSize.w = systemPackIniFile->getI("INTERFACE","SaveGameImageSizeX",opts.saveGameImageSize.w);
+  opts.saveGameImageSize.h = systemPackIniFile->getI("INTERFACE","SaveGameImageSizeY",opts.saveGameImageSize.h);
+
+  opts.showHealthBar     = !(systemPackIniFile->getI("INTERFACE","HideHealthBar",0)!=0);
+  opts.showManaBar       = uint8_t(std::clamp(systemPackIniFile->getI("INTERFACE","ShowManaBar",1), 0, 2));
+  opts.showSwimBar       = uint8_t(std::clamp(systemPackIniFile->getI("INTERFACE","ShowSwimBar",1), 0, 2));
 
 #ifndef NDEBUG
   setMarvinEnabled(true);
@@ -50,12 +74,29 @@ Gothic::Gothic() {
   setMarvinEnabled(CommandLine::inst().isDevMode());
 #endif
 
+  auto& gpu = Resources::device().properties();
+  if(gpu.raytracing.rayQuery) {
+    opts.doRayQuery = CommandLine::inst().isRayQuery();
+    opts.doRtGi     = opts.doRayQuery && CommandLine::inst().isRtGi();
+    }
+
+  if(hasMeshShader()) {
+    opts.doMeshShading = CommandLine::inst().isMeshShading();
+    }
+
+  if(hasBindless()) {
+    opts.doBindless = CommandLine::inst().isBindless();
+    }
+
+  opts.fxaaPreset = CommandLine::inst().fxaaPreset();
+
   wrldDef = CommandLine::inst().wrldDef;
-  if(hasMeshShader())
-    isMeshSh = CommandLine::inst().isMeshShading();
 
   baseIniFile.reset(new IniFile(nestedPath({u"system",u"Gothic.ini"},Dir::FT_File)));
   iniFile    .reset(new IniFile(u"Gothic.ini"));
+  if(!iniFile->has("INTERNAL", "vidResIndex")) {
+    iniFile->set("INTERNAL", "vidResIndex", 0); // full-res
+    }
   {
   defaults.reset(new IniFile());
   defaults->set("GAME", "enableMouse",         1);
@@ -65,6 +106,11 @@ Gothic::Gothic() {
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "useGothic1Controls",  1);
   defaults->set("GAME", "highlightMeleeFocus", 0);
+  defaults->set("GAME", "useQuickSaveKeys",    1);
+
+  // switch related language options
+  defaults->set("GAME", "language", -1);
+  defaults->set("GAME", "voice",    -1);
 
   defaults->set("SKY_OUTDOOR", "zSunName",   "unsun5.tga");
   defaults->set("SKY_OUTDOOR", "zSunSize",   200);
@@ -73,10 +119,14 @@ Gothic::Gothic() {
   defaults->set("SKY_OUTDOOR", "zMoonSize",  400);
   defaults->set("SKY_OUTDOOR", "zMoonAlpha", 255);
 
-  auto& gpu = Resources::device().properties();
   defaults->set("RENDERER_D3D", "zFogRadial", 1); // sunshafts
   defaults->set("ENGINE",       "zEnvMappingEnabled", 1); // reflections
   defaults->set("ENGINE",       "zCloudShadowScale", gpu.type==Tempest::DeviceType::Discrete); // ssao
+  defaults->set("INTERNAL",     "vidResIndex", 0); // full-res
+
+  defaults->set("VIDEO", "zVidBrightness", 0.5f);
+  defaults->set("VIDEO", "zVidContrast",   0.5f);
+  defaults->set("VIDEO", "zVidGamma",      0.5f);
 
   defaults->set("SOUND", "musicEnabled",  1);
   defaults->set("SOUND", "musicVolume",   0.5f);
@@ -170,6 +220,7 @@ Gothic::~Gothic() {
   }
 
 Gothic& Gothic::inst() {
+  assert(instance!=nullptr);
   return *instance;
   }
 
@@ -313,7 +364,7 @@ void Gothic::emitGlobalSound(std::string_view sfx) {
 void Gothic::emitGlobalSound(const SoundFx *sfx) {
   if(sfx!=nullptr) {
     bool loop = false;
-    auto s = sfx->getEffect(sndDev,loop);
+    auto s = sfx->load(sndDev,loop);
     s.play();
 
     for(size_t i=0;i<sndStorage.size();){
@@ -382,14 +433,8 @@ void Gothic::setMarvinEnabled(bool m) {
   isMarvin = m;
   }
 
-bool Gothic::doRayQuery() const {
-  if(!Resources::device().properties().raytracing.rayQuery)
-    return false;
-  return CommandLine::inst().isRayQuery();
-  }
-
-bool Gothic::doMeshShading() const {
-  return isMeshSh;
+const Gothic::Options& Gothic::options() {
+  return instance->opts;
   }
 
 Gothic::LoadState Gothic::checkLoading() const {
@@ -594,34 +639,54 @@ std::string_view Gothic::defaultOutputUnits() const {
   return ouDef;
   }
 
-std::unique_ptr<phoenix::vm> Gothic::createPhoenixVm(std::string_view datFile) {
-  auto sc = loadScript(datFile);
-  phoenix::register_all_script_classes(sc);
+std::unique_ptr<zenkit::DaedalusVm> Gothic::createPhoenixVm(std::string_view datFile, const ScriptLang lang) {
+  auto sc = loadScript(datFile, lang);
+  zenkit::register_all_script_classes(sc);
 
-  auto vm = std::make_unique<phoenix::vm>(std::move(sc), phoenix::execution_flag::vm_allow_null_instance_access);
+  auto vm = std::make_unique<zenkit::DaedalusVm>(std::move(sc), zenkit::DaedalusVmExecutionFlag::ALLOW_NULL_INSTANCE_ACCESS);
   setupVmCommonApi(*vm);
   return vm;
   }
 
-phoenix::script Gothic::loadScript(std::string_view datFile) {
+zenkit::DaedalusScript Gothic::loadScript(std::string_view datFile, const ScriptLang lang) {
   if(Resources::hasFile(datFile)) {
     auto buf = Resources::getFileBuffer(datFile);
-    return phoenix::script::parse(buf);
+    zenkit::DaedalusScript script;
+    script.load(buf.get());
+    return script;
     }
 
   const size_t segment = datFile.find_last_of("\\/");
   if(segment!=std::string::npos && Resources::hasFile(datFile.substr(segment+1))) {
     auto buf = Resources::getFileBuffer(datFile.substr(segment+1));
-    return phoenix::script::parse(buf);
+    zenkit::DaedalusScript script;
+    script.load(buf.get());
+    return script;
     }
 
-  auto gscript = CommandLine::inst().scriptPath();
   char16_t str16[256] = {};
   for(size_t i=0; i<datFile.size() && i<255; ++i)
     str16[i] = char16_t(datFile[i]);
-  auto path = caseInsensitiveSegment(gscript,str16,Dir::FT_File);
-  auto buf = phoenix::buffer::mmap(path);
-  return phoenix::script::parse(buf);
+
+  auto gscript = CommandLine::inst().scriptPath();
+  auto path    = caseInsensitiveSegment(gscript,str16,Dir::FT_File);
+  if(!FileUtil::exists(path) && int(lang)>=0) {
+    gscript = CommandLine::inst().scriptPath(lang);
+    path    = caseInsensitiveSegment(gscript,str16,Dir::FT_File);
+    }
+  if(!FileUtil::exists(path) && int(lang)>=0) {
+    datFile = datFile.substr(segment+1);
+    for(size_t i=0; i<datFile.size() && i<255; ++i)
+      str16[i] = char16_t(datFile[i]);
+    str16[datFile.size()] = u'\0';
+    gscript = CommandLine::inst().scriptPath(lang);
+    path    = caseInsensitiveSegment(gscript,str16,Dir::FT_File);
+    }
+
+  auto buf = zenkit::Read::from(path);
+  zenkit::DaedalusScript script;
+  script.load(buf.get());
+  return script;
   }
 
 bool Gothic::settingsHasSection(std::string_view sec) {
@@ -710,13 +775,20 @@ void Gothic::detectGothicVersion() {
     vinfo.game = 1; else
     vinfo.game = 2;
 
-  if(CommandLine::inst().doForceG1())
-    vinfo.game = 1;
-  else if(CommandLine::inst().doForceG2())
-    vinfo.game = 2;
-
   if(vinfo.game==2) {
     vinfo.patch = baseIniFile->getI("GAME","PATCHVERSION");
+    }
+
+  if(CommandLine::inst().doForceG1()) {
+    vinfo.game = 1;
+    }
+  else if(CommandLine::inst().doForceG2()) {
+    vinfo.game  = 2;
+    vinfo.patch = 0;
+    }
+  else if(CommandLine::inst().doForceG2NR()) {
+    vinfo.game  = 2;
+    vinfo.patch = 5;
     }
   }
 
@@ -729,8 +801,12 @@ void Gothic::setupSettings() {
 
   auto ord  = Gothic::settingsGetS("GAME","invCatOrder");
   while(!ord.empty()) {
-    auto l    = ord.find(',');
+    auto l    = ord.find_first_of(" \t,");
     auto name = ord.substr(0,l);
+
+    if(l!=std::string::npos)
+      ord = ord.substr(l+1); else
+      ord = std::string_view();
 
     ItmFlags v = ITM_CAT_NONE;
     if(name=="COMBAT")
@@ -754,9 +830,6 @@ void Gothic::setupSettings() {
     else
       continue;
     inventoryOrder.push_back(v);
-    if(l==std::string::npos)
-      break;
-    ord = ord.substr(l+1);
     }
   }
 
@@ -767,12 +840,15 @@ std::unique_ptr<DocumentMenu::Show>& Gothic::getDocument(int id) {
   return empty;
   }
 
-std::u16string Gothic::nestedPath(const std::initializer_list<const char16_t*> &name, Tempest::Dir::FileType type) const {
+std::u16string Gothic::nestedPath(const std::initializer_list<const char16_t*> &name, Tempest::Dir::FileType type) {
   return CommandLine::inst().nestedPath(name,type);
   }
 
-void Gothic::setupVmCommonApi(phoenix::vm &vm) {
+void Gothic::setupVmCommonApi(zenkit::DaedalusVm& vm) {
   vm.register_default_external([](std::string_view name) { notImplementedRoutine(std::string {name}); });
+
+  if (auto sym = vm.find_symbol_by_name("C_SVM"))
+    vm.register_as_opaque(sym);
 
   vm.register_external("concatstrings", [](std::string_view a, std::string_view b) { return Gothic::concatstrings(a, b);});
   vm.register_external("inttostring",   [](int i)   { return Gothic::inttostring(i);   });
@@ -782,7 +858,6 @@ void Gothic::setupVmCommonApi(phoenix::vm &vm) {
 
   vm.register_external("hlp_strcmp",    [](std::string_view a, std::string_view b) { return Gothic::hlp_strcmp(a, b); });
   vm.register_external("hlp_random",    [this](int max) { return hlp_random(max); });
-
 
   vm.register_external("introducechapter", [this](std::string_view title, std::string_view subtitle, std::string_view img, std::string_view sound, int time){ introducechapter(title, subtitle, img, sound, time); });
   vm.register_external("playvideo",        [this](std::string_view name){ return playvideo(name); });

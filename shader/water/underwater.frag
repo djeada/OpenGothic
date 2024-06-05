@@ -2,15 +2,6 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_GOOGLE_include_directive : enable
 
-#if defined(RAY_QUERY)
-#extension GL_EXT_ray_query : enable
-#endif
-
-#if defined(RAY_QUERY_AT)
-#extension GL_EXT_nonuniform_qualifier : enable
-#extension GL_EXT_ray_flags_primitive_culling : enable
-#endif
-
 #include "scene.glsl"
 #include "common.glsl"
 
@@ -27,7 +18,7 @@ vec4 waterScatter(vec3 back, vec3 normal, const float len) {
   const vec3  transmittance = exp(-depth * vec3(4,2,1) * 1.25);
 #if defined(SCATTERING)
   const float f       = fresnel(scene.sunDir,normal,IorWater);
-  const vec3  scatter = f * scene.sunCl.rgb * (1-exp(-len/20000.0)) * scene.GSunIntensity * scene.exposure;
+  const vec3  scatter = f * scene.sunColor * (1-exp(-len/20000.0)) * scene.exposure;
   return vec4(scatter*transmittance, 1);
 #else
   return vec4(transmittance, 1);

@@ -109,7 +109,7 @@ struct GameMenu::ListViewDialog : Dialog {
       next->handle->text[0] = text;
       }
 
-    for(uint32_t i=0;i<phoenix::c_menu::item_count;++i)
+    for(uint32_t i=0; i<zenkit::IMenu::item_count; ++i)
       if(&owner.hItems[i]==next) {
         owner.curItem = i;
         break;
@@ -260,8 +260,8 @@ struct GameMenu::SavNameDialog : Dialog {
   bool         accepted = false;
   };
 
-GameMenu::GameMenu(MenuRoot &owner, KeyCodec& keyCodec, phoenix::vm &vm, std::string_view menuSection, KeyCodec::Action kClose)
-  :owner(owner), keyCodec(keyCodec), vm(vm), kClose(kClose) {
+GameMenu::GameMenu(MenuRoot &owner, KeyCodec& keyCodec, zenkit::DaedalusVm& vm, std::string_view menuSection, KeyCodec::Action kClose)
+  :owner(owner), keyCodec(keyCodec), vm(&vm), kClose(kClose) {
   setCursorShape(CursorShape::Hidden);
   timer.timeout.bind(this,&GameMenu::onTick);
   timer.start(100);
@@ -269,11 +269,11 @@ GameMenu::GameMenu(MenuRoot &owner, KeyCodec& keyCodec, phoenix::vm &vm, std::st
   textBuf.reserve(64);
 
   auto* menuSectionSymbol = vm.find_symbol_by_name(menuSection);
-  if (menuSectionSymbol != nullptr) {
-    menu = vm.init_instance<phoenix::c_menu>(menuSectionSymbol);
+  if(menuSectionSymbol!=nullptr) {
+    menu = vm.init_instance<zenkit::IMenu>(menuSectionSymbol);
     } else {
     Tempest::Log::e("Cannot initialize menu ", menuSection, ": Symbol not found.");
-    menu = std::make_shared<phoenix::c_menu>();
+    menu = std::make_shared<zenkit::IMenu>();
     }
 
   back = Resources::loadTexture(menu->back_pic);
@@ -296,8 +296,8 @@ GameMenu::GameMenu(MenuRoot &owner, KeyCodec& keyCodec, phoenix::vm &vm, std::st
   updateValues();
   slider = Resources::loadTexture("MENU_SLIDER_POS.TGA");
 
-  up   = Resources::loadTexture("O.TGA");
-  down = Resources::loadTexture("U.TGA");
+  up     = Resources::loadTexture("O.TGA");
+  down   = Resources::loadTexture("U.TGA");
 
   Gothic::inst().pushPause();
   }
@@ -306,6 +306,17 @@ GameMenu::~GameMenu() {
   Gothic::flushSettings();
   Gothic::inst().popPause();
   Resources::device().waitIdle(); // safe-delete savethumb
+  }
+
+void GameMenu::resetVm(zenkit::DaedalusVm* inVm) {
+  vm = inVm;
+  for(int i=0; i<zenkit::IMenu::item_count; ++i){
+    hItems[i].handle = nullptr;
+    }
+  if(vm==nullptr)
+    return;
+  initItems();
+  updateValues();
   }
 
 GameMenu::QuestStat GameMenu::toStatus(std::string_view str) {
@@ -337,23 +348,23 @@ int32_t GameMenu::numQuests(const QuestLog* ql, QuestStat st) {
   }
 
 void GameMenu::initItems() {
-  for(int i=0;i<phoenix::c_menu::item_count;++i){
+  for(int i=0; i<zenkit::IMenu::item_count; ++i){
     if(menu->items[i].empty())
       continue;
 
     hItems[i].name = menu->items[i];
 
-    auto* menuItemSymbol = vm.find_symbol_by_name(hItems[i].name);
+    auto* menuItemSymbol = vm->find_symbol_by_name(hItems[i].name);
     if (menuItemSymbol != nullptr) {
-      hItems[i].handle = vm.init_instance<phoenix::c_menu_item>(menuItemSymbol);
+      hItems[i].handle = vm->init_instance<zenkit::IMenuItem>(menuItemSymbol);
       } else {
       Tempest::Log::e("Cannot initialize menu item ", hItems[i].name, ": Symbol not found.");
-      hItems[i].handle = std::make_shared<phoenix::c_menu_item>();
+      hItems[i].handle = std::make_shared<zenkit::IMenuItem>();
       }
 
     hItems[i].img = Resources::loadTexture(hItems[i].handle->backpic);
 
-    if(hItems[i].handle->type==phoenix::c_menu_item_type::listbox) {
+    if(hItems[i].handle->type==zenkit::MenuItemType::LISTBOX) {
       hItems[i].visible = false;
       }
     updateItem(hItems[i]);
@@ -363,6 +374,7 @@ void GameMenu::initItems() {
 void GameMenu::paintEvent(PaintEvent &e) {
   Painter p(e);
   p.setScissor(-x(),-y(),owner.w(),owner.h());
+
   if(back) {
     p.setBrush(*back);
     p.drawRect(0,0,w(),h(),
@@ -372,21 +384,24 @@ void GameMenu::paintEvent(PaintEvent &e) {
   for(auto& hItem:hItems)
     drawItem(p,hItem);
 
-  if(menu->flags & phoenix::c_menu_flags::show_info) {
+  if(menu->flags & zenkit::MenuFlag::SHOW_INFO) {
     if(auto sel=selectedItem()) {
-      auto& fnt  = Resources::font();
       auto& item = sel->handle;
       if(item->text->size()>0) {
-        std::string_view txt = item->text[1];
-        int tw = fnt.textSize(txt).w;
-        fnt.drawText(p,(w()-tw)/2,h()-7,txt);
+        auto             fnt   = Resources::font();
+        std::string_view txt   = item->text[1];
+        int              tw    = fnt.textSize(txt).w;
+        const float      scale = Gothic::options().interfaceScale;
+
+        fnt.drawText(p,(w()-tw)/2,h()-int(7*scale),txt);
         }
       }
     }
 
   if(owner.hasVersionLine()) {
-    auto& fnt = Resources::font();
-    fnt.drawText(p, w()-fnt.textSize(appBuild).w-25, h()-25, appBuild);
+    auto&       fnt   = Resources::font();
+    const float scale = Gothic::options().interfaceScale;
+    fnt.drawText(p, w()-fnt.textSize(appBuild).w-int(25*scale), h()-int(25*scale), appBuild);
     }
   }
 
@@ -403,10 +418,10 @@ void GameMenu::drawItem(Painter& p, Item& hItem) {
   const int32_t dimx = (item->dim_x!=-1) ? item->dim_x : 8192;
   const int32_t dimy = (item->dim_y!=-1) ? item->dim_y : 750;
 
-  const int x   = int(float(w()*item->pos_x)/scriptDiv);
-  const int y   = int(float(h()*item->pos_y)/scriptDiv);
-  int       szX = int(float(w()*dimx       )/scriptDiv);
-  int       szY = int(float(h()*dimy       )/scriptDiv);
+  const int   x     = int(float(w()*item->pos_x)/scriptDiv);
+  const int   y     = int(float(h()*item->pos_y)/scriptDiv);
+  int         szX   = int(float(w()*dimx       )/scriptDiv);
+  int         szY   = int(float(h()*dimy       )/scriptDiv);
 
   if(hItem.img && !hItem.img->isEmpty()) {
     p.setBrush(*hItem.img);
@@ -414,13 +429,12 @@ void GameMenu::drawItem(Painter& p, Item& hItem) {
                0,0,hItem.img->w(),hItem.img->h());
     }
 
-  auto& fnt = getTextFont(hItem);
-
-  int tw = szX;
-  int th = szY;
+  auto fnt = getTextFont(hItem);
+  int  tw  = szX;
+  int  th  = szY;
 
   AlignFlag txtAlign=NoAlign;
-  if(flags & phoenix::c_menu_item_flags::centered) {
+  if(flags & zenkit::MenuItemFlag::CENTERED) {
     txtAlign = AlignHCenter | AlignVCenter;
     }
 
@@ -428,14 +442,14 @@ void GameMenu::drawItem(Painter& p, Item& hItem) {
   //p.drawRect(x,y,szX,szY);
   {
   int padd = 0;
-  if((flags & phoenix::c_menu_item_flags::multiline) &&
+  if((flags & zenkit::MenuItemFlag::MULTILINE) &&
      std::min(tw,th)>100*2+fnt.pixelSize()) {
     padd = 100; // TODO: find out exact padding formula
     }
   auto tRect   = Rect(x+padd,y+fnt.pixelSize()+padd,
                       tw-2*padd, th-2*padd);
 
-  if(flags & phoenix::c_menu_item_flags::multiline) {
+  if(flags & zenkit::MenuItemFlag::MULTILINE) {
     int lineCnt     = fnt.lineCount(tRect.w,textBuf.data());
     int linesInView = tRect.h/fnt.pixelSize();
 
@@ -459,10 +473,10 @@ void GameMenu::drawItem(Painter& p, Item& hItem) {
                textBuf.data(), txtAlign, hItem.scroll);
   }
 
-  if(item->type==phoenix::c_menu_item_type::slider && slider!=nullptr) {
+  if(item->type==zenkit::MenuItemType::SLIDER && slider!=nullptr) {
     drawSlider(p,hItem,x,y,szX,szY);
     }
-  else if(item->type==phoenix::c_menu_item_type::listbox) {
+  else if(item->type==zenkit::MenuItemType::LISTBOX) {
     if(auto ql = Gothic::inst().questLog()) {
       const int px = int(float(w()*item->frame_sizex)/scriptDiv);
       const int py = int(float(h()*item->frame_sizey)/scriptDiv);
@@ -471,7 +485,7 @@ void GameMenu::drawItem(Painter& p, Item& hItem) {
       drawQuestList(p, hItem, x+px,y+py, szX-2*px,szY-2*py, *ql,st);
       }
     }
-  else if(item->type==phoenix::c_menu_item_type::input) {
+  else if(item->type==zenkit::MenuItemType::INPUT) {
     string_frm textBuf;
     if(item->on_chg_set_option_section=="KEYS") {
       auto keys = Gothic::settingsGetS(item->on_chg_set_option_section, item->on_chg_set_option);
@@ -515,11 +529,11 @@ void GameMenu::drawSlider(Painter& p, Item& it, int x, int y, int sw, int sh) {
 
 void GameMenu::drawQuestList(Painter& p, Item& it, int x, int y, int w, int h,
                              const QuestLog& log, QuestStat st) {
-  int     itY        = y;
-  int32_t listId     = -1;
-  int32_t listLen    = numQuests(&log,st);
-  int32_t listBegin  = it.scroll;
-  int32_t listEnd    = listLen;
+  int     itY       = y;
+  int32_t listId    = -1;
+  int32_t listLen   = numQuests(&log,st);
+  int32_t listBegin = it.scroll;
+  int32_t listEnd   = listLen;
 
   for(size_t i=0; i<log.questCount(); i++) {
     auto& quest = log.quest(log.questCount()-i-1);
@@ -534,7 +548,7 @@ void GameMenu::drawQuestList(Painter& p, Item& it, int x, int y, int w, int h,
       ft = Resources::FontType::Hi;
 
     auto& fnt = Resources::font(it.handle->fontname,ft);
-    auto  sz  = fnt.textSize(w,quest.name);
+    auto sz  = fnt.textSize(w,quest.name);
     if(itY+sz.h>h+y) {
       listEnd = listId;
       break;
@@ -569,24 +583,36 @@ void GameMenu::resizeEvent(SizeEvent &) {
   onTick();
   }
 
-void GameMenu::onMove(int dy) {
-  Gothic::inst().emitGlobalSound(Gothic::inst().loadSoundFx("MENU_BROWSE"));
-  setSelection(int(curItem)+dy, dy>0 ? 1 : -1);
-  if(auto s = selectedItem())
-    updateSavThumb(*s);
-  update();
-  }
-
-void GameMenu::onSelect() {
-  if(auto sel=selectedItem()){
-    Gothic::inst().emitGlobalSound(Gothic::inst().loadSoundFx("MENU_SELECT"));
-    exec(*sel,0);
+void GameMenu::onKeyboard(KeyCodec::Action key) {
+  auto sel = selectedItem();
+  if(sel!=nullptr && isHorSelectable(sel->handle)) {
+    if(key==KeyCodec::Left)
+      key = KeyCodec::Forward;
+    else if(key==KeyCodec::Right)
+      key = KeyCodec::Back;
     }
-  }
 
-void GameMenu::onSlide(int dx) {
-  if(auto sel=selectedItem()){
-    exec(*sel,dx);
+  if(key==KeyCodec::Forward || key==KeyCodec::Back) {
+    Gothic::inst().emitGlobalSound(Gothic::inst().loadSoundFx("MENU_BROWSE"));
+    const int dy = (key==KeyCodec::Forward) ? -1 : +1;
+    setSelection(int(curItem)+dy, dy);
+    if(auto s = selectedItem())
+      updateSavThumb(*s);
+    update();
+    }
+
+  if((key==KeyCodec::Left || key==KeyCodec::Right) && sel!=nullptr) {
+    const int dx = (key==KeyCodec::Left) ? -1 : +1;
+    exec(*sel,dx,key);
+    }
+
+  if(key==KeyCodec::ActionGeneric && sel!=nullptr) {
+    Gothic::inst().emitGlobalSound(Gothic::inst().loadSoundFx("MENU_SELECT"));
+    exec(*sel,0,key);
+    }
+  if(key==KeyCodec::K_Del && sel!=nullptr) {
+    Gothic::inst().emitGlobalSound(Gothic::inst().loadSoundFx("MENU_SELECT"));
+    exec(*sel,0,key);
     }
   }
 
@@ -599,11 +625,16 @@ void GameMenu::onTick() {
   const float wx = float(owner.w());
   const float wy = float(owner.h());
 
-  if(menu->flags & phoenix::c_menu_flags::dont_scale_dimension)
-    resize(int(float(menu->dim_x)/scriptDiv*fx),int(float(menu->dim_y)/scriptDiv*fy)); else
-    resize(int(float(menu->dim_x)/scriptDiv*wx),int(float(menu->dim_y)/scriptDiv*wy));
+  const float scale = Gothic::options().interfaceScale;
+  Size size = {0, 0};
+  if(menu->flags & zenkit::MenuFlag::DONT_SCALE_DIMENSION) {
+    size = {int(float(menu->dim_x)*fx*scale/scriptDiv),int(float(menu->dim_y)*fy*scale/scriptDiv)};
+    } else {
+    size = {int(float(menu->dim_x)*wx*scale/scriptDiv),int(float(menu->dim_y)*wy*scale/scriptDiv)};
+    }
+  resize(size);
 
-  if(menu->flags & phoenix::c_menu_flags::align_center) {
+  if(menu->flags & zenkit::MenuFlag::ALIGN_CENTER) {
     setPosition((owner.w()-w())/2, (owner.h()-h())/2);
     } else {
     setPosition(int(float(menu->pos_x)/scriptDiv*fx), int(float(menu->pos_y)/scriptDiv*fy));
@@ -616,21 +647,21 @@ void GameMenu::processMusicTheme() {
   }
 
 GameMenu::Item *GameMenu::selectedItem() {
-  if(curItem<phoenix::c_menu::item_count)
+  if(curItem<zenkit::IMenu::item_count)
     return &hItems[curItem];
   return nullptr;
   }
 
 GameMenu::Item* GameMenu::selectedNextItem(Item *it) {
   uint32_t cur=curItem+1;
-  for(uint32_t i=0;i<phoenix::c_menu::item_count;++i)
+  for(uint32_t i=0;i<zenkit::IMenu::item_count;++i)
     if(&hItems[i]==it) {
       cur=i+1;
       break;
       }
 
-  for(int i=0;i<phoenix::c_menu::item_count;++i,cur++) {
-    cur%=phoenix::c_menu::item_count;
+  for(int i=0;i<zenkit::IMenu::item_count;++i,cur++) {
+    cur%=zenkit::IMenu::item_count;
 
     auto& it=hItems[cur].handle;
     if(isEnabled(it))
@@ -641,17 +672,17 @@ GameMenu::Item* GameMenu::selectedNextItem(Item *it) {
 
 GameMenu::Item* GameMenu::selectedContentItem(Item *it) {
   uint32_t cur=curItem+1;
-  for(uint32_t i=0;i<phoenix::c_menu::item_count;++i)
+  for(uint32_t i=0;i<zenkit::IMenu::item_count;++i)
     if(&hItems[i]==it) {
       cur=i+1;
       break;
       }
 
-  for(int i=0;i<phoenix::c_menu::item_count;++i,cur++) {
-    cur%=phoenix::c_menu::item_count;
+  for(int i=0;i<zenkit::IMenu::item_count;++i,cur++) {
+    cur%=zenkit::IMenu::item_count;
 
     auto& it=hItems[cur].handle;
-    if(isEnabled(it) && it->type==phoenix::c_menu_item_type::text)
+    if(isEnabled(it) && it->type==zenkit::MenuItemType::TEXT)
       return &hItems[cur];
     }
   return nullptr;
@@ -659,15 +690,15 @@ GameMenu::Item* GameMenu::selectedContentItem(Item *it) {
 
 void GameMenu::setSelection(int desired, int seek) {
   uint32_t cur=uint32_t(desired);
-  for(int i=0; i<phoenix::c_menu::item_count; ++i,cur+=uint32_t(seek)) {
-    cur%=phoenix::c_menu::item_count;
+  for(int i=0; i<zenkit::IMenu::item_count; ++i,cur+=uint32_t(seek)) {
+    cur%=zenkit::IMenu::item_count;
 
     auto& it=hItems[cur].handle;
     if(isSelectable(it) && isEnabled(it)){
       curItem=cur;
-      for(size_t i=0;i<phoenix::c_menu_item::select_action_count;++i)
-        if(it->on_sel_action[i]==int(phoenix::c_menu_item_select_action::execute_commands))
-          execCommands(it->on_sel_action_s[i],false);
+      for(size_t i=0;i<zenkit::IMenuItem::select_action_count;++i)
+        if(it->on_sel_action[i]==int(zenkit::MenuItemSelectAction::EXECUTE_COMMANDS))
+          execCommands(it->on_sel_action_s[i],false,KeyCodec::Idle);
       return;
       }
     }
@@ -680,20 +711,21 @@ void GameMenu::getText(const Item& it, std::vector<char> &out) {
   out[0]='\0';
 
   const auto& src = it.handle->text[0];
-  if(it.handle->type==phoenix::c_menu_item_type::text) {
+  if(it.handle->type==zenkit::MenuItemType::TEXT) {
     size_t size = src.size();
     out.resize(size+1);
     std::memcpy(out.data(),src.c_str(),size+1);
     return;
     }
 
-  if(it.handle->type==phoenix::c_menu_item_type::choicebox) {
+  if(it.handle->type==zenkit::MenuItemType::CHOICEBOX) {
     strEnum(src,it.value,out);
     return;
     }
   }
 
 const GthFont& GameMenu::getTextFont(const GameMenu::Item &it) {
+  GthFont ret;
   if(!isEnabled(it.handle))
     return Resources::font(it.handle->fontname,Resources::FontType::Disabled);
   if(&it==selectedItem())
@@ -701,21 +733,25 @@ const GthFont& GameMenu::getTextFont(const GameMenu::Item &it) {
   return Resources::font(it.handle->fontname);
   }
 
-bool GameMenu::isSelectable(const std::shared_ptr<phoenix::c_menu_item>& item) {
-  return item != nullptr && (item->flags & phoenix::c_menu_item_flags::selectable) && !isHidden(item);
+bool GameMenu::isSelectable(const std::shared_ptr<zenkit::IMenuItem>& item) {
+  return item != nullptr && (item->flags & zenkit::MenuItemFlag::SELECTABLE) && !isHidden(item);
   }
 
-bool GameMenu::isEnabled(const std::shared_ptr<phoenix::c_menu_item>& item) {
+bool GameMenu::isHorSelectable(const std::shared_ptr<zenkit::IMenuItem>& item) {
+  return item != nullptr && (item->flags & zenkit::MenuItemFlag::HOR_SELECTABLE) && !isHidden(item);
+  }
+
+bool GameMenu::isEnabled(const std::shared_ptr<zenkit::IMenuItem>& item) {
   if(item==nullptr)
     return false;
-  if((item->flags & phoenix::c_menu_item_flags::only_ingame) && !Gothic::inst().isInGameAndAlive())
+  if((item->flags & zenkit::MenuItemFlag::ONLY_INGAME) && !Gothic::inst().isInGameAndAlive())
     return false;
-  if((item->flags & phoenix::c_menu_item_flags::only_outgame) && Gothic::inst().isInGameAndAlive())
+  if((item->flags & zenkit::MenuItemFlag::ONLY_OUTGAME) && Gothic::inst().isInGameAndAlive())
     return false;
   return true;
   }
 
-bool GameMenu::isHidden(const std::shared_ptr<phoenix::c_menu_item>& item) {
+bool GameMenu::isHidden(const std::shared_ptr<zenkit::IMenuItem>& item) {
   if(item==nullptr)
     return false;
   if(item->hide_if_option_set.empty())
@@ -726,13 +762,13 @@ bool GameMenu::isHidden(const std::shared_ptr<phoenix::c_menu_item>& item) {
   return opt==item->hide_on_value;
   }
 
-void GameMenu::exec(Item &p, int slideDx) {
+void GameMenu::exec(Item &p, int slideDx, KeyCodec::Action hint) {
   auto* it = &p;
-  while(it!=nullptr){
+  while(it!=nullptr) {
     if(it==&p)
-      execSingle(*it,slideDx); else
+      execSingle(*it,slideDx,hint); else
       execChgOption(*it,slideDx);
-    if(it->handle->flags & phoenix::c_menu_item_flags::effects) {
+    if(it->handle->flags & zenkit::MenuItemFlag::EFFECTS) {
       auto next=selectedNextItem(it);
       if(next!=&p)
         it=next;
@@ -747,16 +783,13 @@ void GameMenu::exec(Item &p, int slideDx) {
     owner.popMenu();
   }
 
-void GameMenu::execSingle(Item &it, int slideDx) {
-  using phoenix::c_menu_item_select_action;
-  using phoenix::c_menu_item_select_event;
-
+void GameMenu::execSingle(Item &it, int slideDx, KeyCodec::Action hint) {
   auto& item          = it.handle;
   auto& onSelAction   = item->on_sel_action;
   auto& onSelAction_S = item->on_sel_action_s;
   auto& onEventAction = item->on_event_action;
 
-  if(item->type==phoenix::c_menu_item_type::input && slideDx==0) {
+  if(item->type==zenkit::MenuItemType::INPUT && slideDx==0) {
     ctrlInput = &it;
     if(item->on_chg_set_option.empty()) {
       SavNameDialog dlg{item->text[0]};
@@ -767,7 +800,14 @@ void GameMenu::execSingle(Item &it, int slideDx) {
       ctrlInput = nullptr;
       if(!dlg.accepted)
         return;
-      } else {
+      }
+    else if(hint==KeyCodec::K_Del) {
+      keyCodec.clear(item->on_chg_set_option_section, item->on_chg_set_option);
+      updateItem(it);
+      ctrlInput = nullptr;
+      return; //HACK: there is a SEL_ACTION_BACK token in same item
+      }
+    else {
       KeyEditDialog dlg;
       dlg.resize(owner.size());
       dlg.exec();
@@ -785,22 +825,22 @@ void GameMenu::execSingle(Item &it, int slideDx) {
       }
     }
 
-  for(size_t i=0; i<phoenix::c_menu_item::select_action_count; ++i) {
-    auto action = c_menu_item_select_action(onSelAction[i]);
+  for(size_t i=0; i<zenkit::IMenuItem::select_action_count; ++i) {
+    auto action = zenkit::MenuItemSelectAction(onSelAction[i]);
     switch(action) {
-      case c_menu_item_select_action::unknown:
+      case zenkit::MenuItemSelectAction::UNKNOWN:
         break;
-      case c_menu_item_select_action::back:
+      case zenkit::MenuItemSelectAction::BACK:
         Gothic::inst().emitGlobalSound(Gothic::inst().loadSoundFx("MENU_ESC"));
         exitFlag = true;
         break;
-      case c_menu_item_select_action::start_menu:
-        if(vm.find_symbol_by_name(onSelAction_S[i]) != nullptr)
-          owner.pushMenu(new GameMenu(owner,keyCodec,vm,onSelAction_S[i],keyClose()));
+      case zenkit::MenuItemSelectAction::START_MENU:
+        if(vm->find_symbol_by_name(onSelAction_S[i]) != nullptr)
+          owner.pushMenu(new GameMenu(owner,keyCodec,*vm,onSelAction_S[i],keyClose()));
         break;
-      case c_menu_item_select_action::start_item:
+      case zenkit::MenuItemSelectAction::START_ITEM:
         break;
-      case c_menu_item_select_action::close:
+      case zenkit::MenuItemSelectAction::CLOSE:
         Gothic::inst().emitGlobalSound(Gothic::inst().loadSoundFx("MENU_ESC"));
         closeFlag = true;
         if(onSelAction_S[i]=="NEW_GAME")
@@ -812,22 +852,22 @@ void GameMenu::execSingle(Item &it, int slideDx) {
         else if(onSelAction_S[i]=="SAVEGAME_LOAD")
           execLoadGame(it);
         break;
-      case c_menu_item_select_action::con_commands:
-        // unknown
+      case zenkit::MenuItemSelectAction::CON_COMMANDS:
+        // TODO: inline marvin commands
         break;
-      case c_menu_item_select_action::play_sound:
+      case zenkit::MenuItemSelectAction::PLAY_SOUND:
         Gothic::inst().emitGlobalSound(Gothic::inst().loadSoundFx(onSelAction_S[i]));
         break;
-      case c_menu_item_select_action::execute_commands:
-        execCommands(onSelAction_S[i],true);
+      case zenkit::MenuItemSelectAction::EXECUTE_COMMANDS:
+        execCommands(onSelAction_S[i],true,hint);
         break;
       }
     }
 
-  if(onEventAction[int(c_menu_item_select_event::execute)]>0){
-    auto* sym = vm.find_symbol_by_index(uint32_t(onEventAction[int(c_menu_item_select_event::execute)]));
+  if(onEventAction[int(zenkit::MenuItemSelectEvent::EXECUTE)]>0){
+    auto* sym = vm->find_symbol_by_index(uint32_t(onEventAction[int(zenkit::MenuItemSelectEvent::EXECUTE)]));
     if (sym != nullptr)
-      vm.call_function(sym);
+      vm->call_function(sym);
     }
 
   execChgOption(it,slideDx);
@@ -839,20 +879,22 @@ void GameMenu::execChgOption(Item &item, int slideDx) {
   if(sec.empty() || opt.empty())
     return;
 
-  if(item.handle->type==phoenix::c_menu_item_type::slider && slideDx!=0) {
+  if(item.handle->type==zenkit::MenuItemType::SLIDER && slideDx!=0) {
     updateItem(item);
     float v = Gothic::settingsGetF(sec, opt);
     v  = std::max(0.f,std::min(v+float(slideDx)*0.03f,1.f));
     Gothic::settingsSetF(sec, opt, v);
     }
-  if(item.handle->type==phoenix::c_menu_item_type::choicebox && slideDx==0) {
+  if(item.handle->type==zenkit::MenuItemType::CHOICEBOX) {
     updateItem(item);
-    item.value += 1; // next value
+    const int cnt = int(strEnumSize(item.handle->text[0]));
+    if(slideDx==0 && cnt==2)
+      slideDx = 1; // QoL: on/off toggle
 
-    int cnt = int(strEnumSize(item.handle->text[0]));
+    item.value += slideDx; // next value
     if(cnt>0)
-      item.value%=cnt; else
-      item.value =0;
+      item.value = (item.value+cnt) % cnt; else
+      item.value = 0;
     Gothic::settingsSetI(sec, opt, item.value);
     }
   }
@@ -879,13 +921,13 @@ void GameMenu::execLoadGame(const GameMenu::Item &item) {
   Gothic::inst().load(fname);
   }
 
-void GameMenu::execCommands(std::string str, bool isClick) {
+void GameMenu::execCommands(std::string str, bool isClick, KeyCodec::Action hint) {
   if(str.find("EFFECTS ")==0) {
     // menu log
     const char* arg0 = str.data()+std::strlen("EFFECTS ");
-    for(uint32_t id=0; id<phoenix::c_menu::item_count; ++id) {
+    for(uint32_t id=0; id<zenkit::IMenu::item_count; ++id) {
       auto& i = hItems[id];
-      if(i.handle != nullptr && i.handle->type==phoenix::c_menu_item_type::listbox) {
+      if(i.handle != nullptr && i.handle->type==zenkit::MenuItemType::LISTBOX) {
         i.visible = (i.name==arg0);
         if(i.visible && isClick) {
           const uint32_t prev = curItem;
@@ -907,7 +949,7 @@ void GameMenu::execCommands(std::string str, bool isClick) {
       ++what;
     for(auto& i:hItems)
       if(i.name==what)
-        execSingle(i,0);
+        execSingle(i,0,hint);
     }
   if(str=="SETDEFAULT") {
     setDefaultKeys("KEYSDEFAULT0");
@@ -945,8 +987,9 @@ void GameMenu::updateSavTitle(GameMenu::Item& sel) {
     Serialize reader(fin);
     reader.setEntry("header");
     reader.read(hdr);
-    sel.handle->text[0] = hdr.name;
-    sel.savHdr         = std::move(hdr);
+    if(id!=0 || sel.handle->text[0].empty())
+      sel.handle->text[0] = hdr.name;
+    sel.savHdr = std::move(hdr);
 
     if(reader.setEntry("priview.png"))
       reader.read(sel.savPriview); // legacy
@@ -981,7 +1024,7 @@ void GameMenu::updateSavThumb(GameMenu::Item &sel) {
 
 void GameMenu::updateVideo() {
   set("MENUITEM_VID_DEVICE_CHOICE",     Resources::renderer());
-  set("MENUITEM_VID_RESOLUTION_CHOICE", "");
+  set("MENUITEM_VID_RESOLUTION_CHOICE", "full|upscale(75%)|upscale(half)");
   }
 
 void GameMenu::setDefaultKeys(std::string_view preset) {
@@ -1048,7 +1091,7 @@ std::string_view GameMenu::strEnum(std::string_view en, int id, std::vector<char
       break;
       }
 
-  for(;en[i];++i){
+  for(;i<en.size();++i){
     size_t b=i;
     for(size_t r=i; r<en.size(); ++r,++i)
       if(en[r]=='|')
@@ -1084,7 +1127,7 @@ size_t GameMenu::strEnumSize(std::string_view en) {
     if(en[i]=='#' || en[i]=='|') {
       cnt += en[i]=='|' ? 2 : 1;
       i++;
-      for(;en[i];++i) {
+      for(;i<en.size();++i) {
         if(en[i]=='|')
           cnt++;
         }
@@ -1162,7 +1205,7 @@ void GameMenu::setPlayer(const Npc &pl) {
     return;
     }
 
-  set("MENU_ITEM_PLAYERGUILD", gilds->get_string(pl.guild()));
+  set("MENU_ITEM_PLAYERGUILD", gilds->get_string(uint16_t(pl.guild())));
 
   set("MENU_ITEM_LEVEL",       pl.level());
   set("MENU_ITEM_EXP",         pl.experience());
@@ -1181,8 +1224,8 @@ void GameMenu::setPlayer(const Npc &pl) {
 
   const bool g2        = Gothic::inst().version().game==2;
   const int  talentMax = g2 ? TALENT_MAX_G2 : TALENT_MAX_G1;
-  for(int i=0; i<talentMax; ++i) {
-    auto& str = tal->get_string(size_t(i));
+  for(uint16_t i=0; i<talentMax; ++i) {
+    auto& str = tal->get_string(i);
     if(str.empty())
       continue;
 
@@ -1190,7 +1233,7 @@ void GameMenu::setPlayer(const Npc &pl) {
     const int val = g2 ? pl.hitChance(Talent(i)) : pl.talentValue(Talent(i));
 
     set(string_frm("MENU_ITEM_TALENT_",i,"_TITLE"), str);
-    set(string_frm("MENU_ITEM_TALENT_",i,"_SKILL"), strEnum(talV->get_string(size_t(i)),sk,textBuf));
+    set(string_frm("MENU_ITEM_TALENT_",i,"_SKILL"), strEnum(talV->get_string(i),sk,textBuf));
     set(string_frm("MENU_ITEM_TALENT_",i),          string_frm(val,"%"));
     }
   }

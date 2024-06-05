@@ -239,31 +239,31 @@ void MdlVisual::clearSlotItem(std::string_view bone) {
     }
   }
 
-bool MdlVisual::setFightMode(phoenix::mds::event_fight_mode mode) {
-  WeaponState f=WeaponState::NoWeapon;
+bool MdlVisual::setFightMode(zenkit::MdsFightMode mode) {
+  WeaponState f = WeaponState::NoWeapon;
 
   switch(mode) {
-    case phoenix::mds::event_fight_mode::invalid:
+    case zenkit::MdsFightMode::INVALID:
       return false;
-    case phoenix::mds::event_fight_mode::none:
+    case zenkit::MdsFightMode::NONE:
       f=WeaponState::NoWeapon;
       break;
-    case phoenix::mds::event_fight_mode::fist:
+    case zenkit::MdsFightMode::FIST:
       f=WeaponState::Fist;
       break;
-    case phoenix::mds::event_fight_mode::one_handed:
+    case zenkit::MdsFightMode::SINGLE_HANDED:
       f=WeaponState::W1H;
       break;
-    case phoenix::mds::event_fight_mode::two_handed:
+    case zenkit::MdsFightMode::DUAL_HANDED:
       f=WeaponState::W2H;
       break;
-    case phoenix::mds::event_fight_mode::bow:
+    case zenkit::MdsFightMode::BOW:
       f=WeaponState::Bow;
       break;
-    case phoenix::mds::event_fight_mode::crossbow:
+    case zenkit::MdsFightMode::CROSSBOW:
       f=WeaponState::CBow;
       break;
-    case phoenix::mds::event_fight_mode::magic:
+    case zenkit::MdsFightMode::MAGIC:
       f=WeaponState::Mage;
       break;
     }
@@ -350,7 +350,7 @@ void MdlVisual::stopEffect(int32_t slot) {
     }
   }
 
-void MdlVisual::setNpcEffect(World& owner, Npc& npc, std::string_view s, phoenix::npc_flag flags) {
+void MdlVisual::setNpcEffect(World& owner, Npc& npc, std::string_view s, zenkit::NpcFlag flags) {
   if(hnpcVisualName!=s) {
     hnpcVisualName = s;
     auto vfx = Gothic::inst().loadVisualFx(s);
@@ -366,7 +366,7 @@ void MdlVisual::setNpcEffect(World& owner, Npc& npc, std::string_view s, phoenix
     hnpcVisual.view.setMesh(&view);
     }
 
-  const bool nextGhost = (flags & phoenix::npc_flag::ghost);
+  const bool nextGhost = (flags & zenkit::NpcFlag::GHOST);
   if(hnpcFlagGhost!=nextGhost) {
     hnpcFlagGhost=nextGhost;
     view.setAsGhost(hnpcFlagGhost);
@@ -458,7 +458,7 @@ void MdlVisual::setTorch(bool t, World& owner) {
   if(torchId==size_t(-1))
     return;
 
-  auto hitem = std::make_shared<phoenix::c_item>();
+  auto hitem = std::make_shared<zenkit::IItem>();
   owner.script().initializeInstanceItem(hitem, torchId);
   torch.view.reset(new ObjVisual());
   torch.view->setVisual(*hitem,owner,false);
@@ -614,8 +614,9 @@ const Animation::Sequence* MdlVisual::startAnimAndGet(Npc& npc, AnimationSolver:
     return nullptr;
 
   bool forceAnim=false;
-  if(a==AnimationSolver::Anim::DeadA || a==AnimationSolver::Anim::UnconsciousA ||
-     a==AnimationSolver::Anim::DeadB || a==AnimationSolver::Anim::UnconsciousB) {
+  if(a==AnimationSolver::Anim::DeadA        || a==AnimationSolver::Anim::DeadB ||
+     a==AnimationSolver::Anim::UnconsciousA || a==AnimationSolver::Anim::UnconsciousB ||
+     a==AnimationSolver::Anim::FallDeepA    || a==AnimationSolver::Anim::FallDeepB) {
     skInst->stopAllAnim();
     forceAnim = true;
     }
@@ -626,8 +627,12 @@ const Animation::Sequence* MdlVisual::startAnimAndGet(Npc& npc, AnimationSolver:
   BodyState bs = BS_NONE;
   switch(a) {
     case AnimationSolver::Anim::NoAnim:
-    case AnimationSolver::Anim::Fallen:
       bs = BS_NONE;
+      break;
+    case AnimationSolver::Anim::Fallen:
+    case AnimationSolver::Anim::FallenA:
+    case AnimationSolver::Anim::FallenB:
+      bs = BS_LIE;
       break;
     case AnimationSolver::Anim::Idle:
     case AnimationSolver::Anim::MagNoMana:
@@ -649,6 +654,8 @@ const Animation::Sequence* MdlVisual::startAnimAndGet(Npc& npc, AnimationSolver:
       break;
     case AnimationSolver::Anim::Fall:
     case AnimationSolver::Anim::FallDeep:
+    case AnimationSolver::Anim::FallDeepA:
+    case AnimationSolver::Anim::FallDeepB:
       bs = BS_FALL;
       break;
     case AnimationSolver::Anim::Jump:
@@ -854,7 +861,7 @@ std::string_view MdlVisual::visualSkeletonScheme() const {
   if(skeleton==nullptr)
     return "";
   auto ret = skeleton->name();
-  auto end = ret.find(".");
+  auto end = ret.find_first_of("._");
   return ret.substr(0, end);
   }
 
@@ -874,12 +881,9 @@ const Animation::Sequence* MdlVisual::startAnimItem(Npc &npc, std::string_view s
   }
 
 const Animation::Sequence* MdlVisual::startAnimSpell(Npc &npc, std::string_view scheme, bool invest) {
-  string_frm name("");
-  if(invest)
-    name = string_frm("S_",scheme,"CAST"); else
-    name = string_frm("S_",scheme,"SHOOT");
+  const bool run = (skInst->bodyState()&BS_MAX)==BS_RUN; // not really the case, as in Gothic player can't cast spell, while running
 
-  const Animation::Sequence *sq = solver.solveFrm(name);
+  const Animation::Sequence *sq = solver.solveAnim(scheme,run,invest);
   if(skInst->startAnim(solver,sq,0,BS_CASTING,Pose::NoHint,npc.world().tickCount())) {
     return sq;
     }
@@ -892,9 +896,8 @@ bool MdlVisual::startAnimDialog(Npc &npc) {
   if(npc.bodyStateMasked()!=BS_STAND)
     return true;
 
-  //const int countG1 = 21;
-  const int countG2 = 11;
-  const int id      = std::rand()%countG2 + 1;
+  const uint16_t count = Gothic::inst().version().dialogGestureCount();
+  const int      id    = std::rand()%count + 1;
 
   char name[32]={};
   std::snprintf(name,sizeof(name),"T_DIALOGGESTURE_%02d",id);
@@ -921,12 +924,15 @@ void MdlVisual::startFaceAnim(Npc& npc, std::string_view anim, float intensity, 
   }
 
 void MdlVisual::stopDlgAnim(Npc& npc) {
-  //const int countG1 = 21;
-  const int countG2 = 11;
-  for(uint16_t i=0; i<countG2; i++){
+  const uint16_t count = Gothic::inst().version().dialogGestureCount();
+  for(uint16_t i=0; i<count; i++){
     char buf[32]={};
     std::snprintf(buf,sizeof(buf),"T_DIALOGGESTURE_%02d",i+1);
     skInst->stopAnim(buf);
     }
-  startFaceAnim(npc,"VISEME",1,0);
+
+  if(npc.processPolicy()<=Npc::AiNormal) {
+    // avoid PCI traffic on distant npc's
+    startFaceAnim(npc,"VISEME",1,0);
+    }
   }

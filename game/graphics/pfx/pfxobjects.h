@@ -5,7 +5,6 @@
 
 #include <memory>
 #include <list>
-#include <random>
 
 #include "world/objects/pfxemitter.h"
 #include "graphics/visualobjects.h"
@@ -28,18 +27,23 @@ class PfxObjects final {
     void       tick(uint64_t ticks);
     bool       isInPfxRange(const Tempest::Vec3& pos) const;
 
+    void       prepareUniforms();
     void       preFrameUpdate(uint8_t fId);
+
+    void       drawGBuffer    (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId);
+    void       drawShadow     (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId, int layer);
+    void       drawTranslucent(Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId);
 
   private:
     struct SpriteEmitter {
-      phoenix::sprite_alignment   visualCamAlign = phoenix::sprite_alignment::none;
+      zenkit::SpriteAlignment     visualCamAlign = zenkit::SpriteAlignment::NONE;
       int32_t                     zBias          = 0;
       Tempest::Vec2               decalDim = {};
       std::unique_ptr<ParticleFx> pfx;
       };
 
     PfxBucket&                    getBucket(const ParticleFx& decl);
-    PfxBucket&                    getBucket(const Material& mat, const phoenix::vob& vob);
+    PfxBucket&                    getBucket(const Material& mat, const zenkit::VirtualObject& vob);
 
     WorldView&                    world;
     const SceneGlobals&           scene;
